@@ -34,8 +34,9 @@ The repository includes several key scripts:
 
 1. Clone the repository
 2. Install dependencies:
+
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev,notebook]"  # From project root
 ```
 
 ### Running the visualization
@@ -47,6 +48,7 @@ python integrate_topic_labeling.py --conversation [conversation_name] --data-typ
 ```
 
 Where:
+
 - `conversation_name` is one of: biodiversity, sji, bg2050, vw
 - `data-type` specifies which data to process: participant, comment, or both
 

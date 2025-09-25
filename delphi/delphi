@@ -6,7 +6,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Path to the Python CLI script and virtual environment
 CLI_SCRIPT="$SCRIPT_DIR/scripts/delphi_cli.py"
-VENV_DIR="$SCRIPT_DIR/delphi-env"
+VENV_DIR="$SCRIPT_DIR/delphi-dev-env"
 
 # Check if the virtual environment exists
 if [ ! -d "$VENV_DIR" ]; then

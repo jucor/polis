@@ -27,13 +27,13 @@ This document provides a comprehensive guide on how to set up, run, and test the
 cd delphi
 
 # Create a virtual environment
-python -m venv polis_env
+python3 -m venv delphi-dev-env
 
 # Activate the virtual environment
 # On Linux/macOS
-source polis_env/bin/activate
+source delphi-dev-env/bin/activate
 # On Windows
-polis_env\Scripts\activate
+delphi-dev-env\Scripts\activate
 ```
 
 ## Package Installation
@@ -41,11 +41,17 @@ polis_env\Scripts\activate
 Once your environment is set up, install the package in development mode:
 
 ```bash
-# Make sure you're in the delphi directory
-pip install -e .
+# Install with development and notebook dependencies
+pip install -e ".[dev,notebook]"
 ```
 
 This will install all the required dependencies and make the `polismath` package available in your environment.
+
+**Note**: For the quickest setup, you can use the automated setup script:
+
+```bash
+./setup_dev.sh
+```
 
 ## Running Tests
 
@@ -258,6 +264,7 @@ python final_demo.py
 ### Getting Help
 
 If you encounter issues, check:
+
 1. The README.md file for the latest documentation
 2. The tests/TESTING_RESULTS.md for known issues
 3. The GitHub repository for open issues

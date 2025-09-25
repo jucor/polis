@@ -1,6 +1,37 @@
 # Pol.is Math (Python Implementation)
 
-## Quickstart example
+This is a Python implementation of the mathematical components of the [Pol.is](https://pol.is) conversation system, converted from the original Clojure codebase.
+
+## Quick Development Setup
+
+For the fastest development environment setup:
+
+```bash
+# One-command setup (recommended)
+./setup_dev.sh
+```
+
+This will create the canonical `delphi-dev-env` virtual environment, install all dependencies, and set up development tools.
+
+## Manual Development Setup
+
+If you prefer manual setup:
+
+```bash
+# Create canonical virtual environment
+python3 -m venv delphi-dev-env
+source delphi-dev-env/bin/activate
+
+# Install with development dependencies
+pip install -e ".[dev,notebook]"
+
+# Set up pre-commit hooks
+pre-commit install
+```
+
+## Production/Docker Quickstart
+
+For production or containerized usage:
 
 ```bash
 docker-compose up -d
@@ -16,10 +47,8 @@ python setup_minio_bucket.py
 ```
 
 ```bash
-./run_delphi.sh --zid=36416
+./run_delphi.py --zid=36416
 ```
-
-This is a Python implementation of the mathematical components of the [Pol.is](https://pol.is) conversation system, converted from the original Clojure codebase.
 
 ## Features
 

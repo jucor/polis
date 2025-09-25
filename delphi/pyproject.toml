@@ -1,0 +1,269 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "delphi-polis"
+version = "0.1.0"
+description = "Mathematical analytics pipeline for Polis conversations"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Polis Technology Inc."},
+]
+keywords = ["polis", "analytics", "conversation", "democracy", "machine-learning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+dependencies = [
+    "numpy>=1.26.4,<2.0",
+    "pandas>=2.1.4",
+    "sqlalchemy==2.0.29",
+    "psycopg2-binary==2.9.10",
+    "boto3==1.34.70",
+    "scikit-learn>=1.4.2",
+    "scipy>=1.12.0",
+    "tqdm==4.66.2",
+    "matplotlib==3.10.6",
+    "ddtrace==3.13.0",
+    # API dependencies
+    "fastapi==0.115.0",
+    "uvicorn>=0.20.0",
+    "starlette>=0.22.0",
+    "python-multipart>=0.0.5",
+    "itsdangerous>=2.0.0",
+    "jinja2>=3.0.0",
+    "pydantic>=1.10.0",
+    "python-dotenv>=0.21.0",
+    # Orchestrator
+    "colorlog>=6.9.0",
+    # PyTorch dependencies
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "torchaudio==2.8.0",
+    # UMAP narrative dependencies
+    "umap-learn>=0.5.7",
+    "sentence-transformers>=2.2.0",
+    "hdbscan>=0.8.40",
+    "numba>=0.61.2",
+    # Visualization
+    "datamapplot>=0.5.1",
+    # AWS and DynamoDB
+    "pynamodb>=5.4.0",
+    "aws-lambda-powertools>=2.15.0",
+    "aws-xray-sdk>=2.12.0",
+    # LLM and reporting
+    "requests>=2.28.0",
+    "xmltodict>=0.13.0",
+    "anthropic>=0.5.0",
+    "ollama>=0.5.1",
+    "llvmlite>=0.44.0",
+    # CLI
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "httpx>=0.23.0",
+    "moto>=4.1.0",
+    # Code quality
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+    "mypy>=1.5.0",
+    "pre-commit>=3.0.0",
+    # Dependency management
+    "pip-tools>=7.0.0",
+    # Type stubs
+    "types-requests",
+    "types-boto3",
+]
+
+notebook = [
+    "jupyter>=1.0.0",
+    "ipython>=8.0.0",
+    "matplotlib>=3.10.6",
+]
+
+[project.scripts]
+delphi = "scripts.delphi_cli:main"
+run-delphi = "run_delphi:main"
+
+[project.urls]
+Homepage = "https://github.com/compdemocracy/polis"
+Repository = "https://github.com/compdemocracy/polis"
+Documentation = "https://github.com/compdemocracy/polis/tree/master/delphi/docs"
+Issues = "https://github.com/compdemocracy/polis/issues"
+
+# Hatchling configuration
+[tool.hatch.build.targets.wheel]
+packages = ["polismath", "umap_narrative"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/polismath",
+    "/umap_narrative",
+    "/scripts",
+    "/tests",
+    "/docs",
+    "*.py",
+    "*.md",
+    "*.toml",
+    "*.txt",
+]
+
+# Testing configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+    "--cov=polismath",
+    "--cov=umap_narrative",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-fail-under=70",
+]
+filterwarnings = [
+    "error",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "real_data: marks tests that use real data",
+]
+
+# Black code formatting
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+# Ruff linting
+[tool.ruff]
+target-version = "py39"
+line-length = 88
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+    "PL", # pylint
+]
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+    "PLR0913", # too many arguments
+    "PLR0912", # too many branches
+    "PLR0915", # too many statements
+]
+
+[tool.ruff.per-file-ignores]
+"tests/*" = ["PLR2004"]  # Magic value used in comparison
+"scripts/*" = ["T201"]   # Print statements are OK in scripts
+
+[tool.ruff.isort]
+known-first-party = ["polismath", "umap_narrative"]
+
+# MyPy type checking
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = [
+    "boto3.*",
+    "botocore.*",
+    "sklearn.*",
+    "umap.*",
+    "hdbscan.*",
+    "sentence_transformers.*",
+    "torch.*",
+    "torchvision.*",
+    "torchaudio.*",
+]
+ignore_missing_imports = true
+
+# Bandit security configuration
+[tool.bandit]
+exclude_dirs = ["tests", "scripts"]
+skips = ["B101", "B601"]  # Skip assert statements and shell injection in tests
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["polismath", "umap_narrative"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/conftest.py",
+    "*/__pycache__/*",
+    "*/migrations/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]

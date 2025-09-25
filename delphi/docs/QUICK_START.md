@@ -15,26 +15,23 @@ It's recommended to create a fresh virtual environment:
 cd delphi
 
 # Create a new virtual environment
-python3 -m venv new_polis_env
+python3 -m venv delphi-dev-env
 
 # Activate the virtual environment
-source new_polis_env/bin/activate  # On Linux/macOS
+source delphi-dev-env/bin/activate  # On Linux/macOS
 # or
-new_polis_env\Scripts\activate     # On Windows
+delphi-dev-env\Scripts\activate     # On Windows
 ```
 
-Your command prompt should now show `(new_polis_env)` indicating the environment is active.
+Your command prompt should now show `(delphi-dev-env)` indicating the environment is active.
 
 ### Installing Dependencies
 
 With your virtual environment activated, install the package and its dependencies:
 
 ```bash
-# Install the polismath package in development mode
-pip install -e .
-
-# Install additional packages for visualization and notebooks
-pip install matplotlib seaborn jupyter
+# Install the package with development dependencies
+pip install -e ".[dev,notebook]"
 ```
 
 This will install the package in development mode with all required dependencies.
@@ -89,6 +86,7 @@ python run_analysis.py
 ```
 
 This will:
+
 1. Load data from the biodiversity dataset
 2. Process votes and comments
 3. Run PCA and clustering
@@ -158,12 +156,13 @@ To work with your own data:
    - Comments: columns `comment-id` and `comment-body`
 
 2. Use the Conversation class:
+
    ```python
    from polismath.conversation.conversation import Conversation
-   
+
    # Create a conversation
    conv = Conversation("my-conversation-id")
-   
+
    # Process votes in the format that conv.update_votes expects:
    votes_list = []
    for _, row in votes_df.iterrows():
@@ -172,14 +171,14 @@ To work with your own data:
            'tid': str(row['comment-id']),
            'vote': float(row['vote'])
        })
-   
+
    # IMPORTANT: Update the conversation with votes and CAPTURE the return value
    # Also set recompute=True to ensure all computations are performed
    conv = conv.update_votes({"votes": votes_list}, recompute=True)
-   
+
    # If needed, explicitly force recomputation
    conv = conv.recompute()
-   
+
    # Access results
    rating_matrix = conv.rating_mat
    pca_results = conv.pca
