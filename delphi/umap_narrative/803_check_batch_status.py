@@ -16,7 +16,6 @@ import logging
 import os
 import sys
 from datetime import UTC, datetime, timedelta
-from typing import Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -58,7 +57,7 @@ EXIT_CODE_PROCESSING_CONTINUES = (
 class BatchStatusChecker:
     """Checks a single batch job's status and processes results if complete."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the checker."""
         raw_endpoint = os.environ.get("DYNAMODB_ENDPOINT")
         endpoint_url = raw_endpoint if raw_endpoint and raw_endpoint.strip() else None
@@ -280,8 +279,8 @@ class BatchStatusChecker:
             return False
 
     async def check_and_process_jobs(
-        self, specific_job_id: Optional[str] = None
-    ) -> Optional[int]:
+        self, specific_job_id: str | None = None
+    ) -> int | None:
         jobs_to_check = self.find_pending_jobs(specific_job_id)
 
         if not jobs_to_check:
@@ -401,7 +400,7 @@ class BatchStatusChecker:
         return None
 
 
-async def main():
+async def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
         description="Check a single Anthropic Batch Job status."

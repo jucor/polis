@@ -17,9 +17,10 @@ import threading
 import time
 import urllib
 import uuid
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any, Generator, Optional
+from typing import Any
 
 import boto3
 import sqlalchemy as sa
@@ -33,13 +34,13 @@ class PostgresConfig:
 
     def __init__(
         self,
-        url: Optional[str] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        database: Optional[str] = None,
-        user: Optional[str] = None,
-        password: Optional[str] = None,
-        ssl_mode: Optional[str] = None,
+        url: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        database: str | None = None,
+        user: str | None = None,
+        password: str | None = None,
+        ssl_mode: str | None = None,
     ):
         """
         Initialize PostgreSQL configuration.
@@ -141,7 +142,7 @@ class PostgresConfig:
 class PostgresClient:
     """PostgreSQL client for accessing Polis data."""
 
-    def __init__(self, config: Optional[PostgresConfig] = None):
+    def __init__(self, config: PostgresConfig | None = None):
         """
         Initialize PostgreSQL client.
 
@@ -224,7 +225,7 @@ class PostgresClient:
             session.close()
 
     def query(
-        self, sql: str, params: Optional[dict[str, Any]] = None
+        self, sql: str, params: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
         """
         Execute a SQL query.
@@ -246,7 +247,7 @@ class PostgresClient:
             columns = result.keys()
             return [dict(zip(columns, row, strict=False)) for row in result]
 
-    def get_conversation_by_id(self, zid: int) -> Optional[dict[str, Any]]:
+    def get_conversation_by_id(self, zid: int) -> dict[str, Any] | None:
         """
         Get conversation information by ID.
 
@@ -341,7 +342,7 @@ class PostgresClient:
 
         return self.query(sql, {"zid": zid})
 
-    def get_conversation_id_by_slug(self, conversation_slug: str) -> Optional[int]:
+    def get_conversation_id_by_slug(self, conversation_slug: str) -> int | None:
         """
         Get conversation ID by its slug (zinvite).
 
@@ -387,7 +388,7 @@ def signal_handler(sig: int, frame: Any) -> None:
 class JobProcessor:
     """Process jobs from the Delphi_JobQueue."""
 
-    def __init__(self, endpoint_url: Optional[str] = None, region: str = "us-east-1"):
+    def __init__(self, endpoint_url: str | None = None, region: str = "us-east-1"):
         """Initialize the job processor."""
         self.worker_id = str(uuid.uuid4())
         raw_endpoint = endpoint_url or os.environ.get("DYNAMODB_ENDPOINT")
@@ -422,7 +423,7 @@ class JobProcessor:
             logger.error(f"Failed to connect to Delphi_JobQueue table: {e}")
             raise
 
-    def find_pending_job(self) -> Optional[dict[str, Any]]:
+    def find_pending_job(self) -> dict[str, Any] | None:
         """
         Finds the highest-priority actionable job. This includes PENDING jobs, jobs
         awaiting a re-check, and jobs with expired locks ("zombie" jobs).
@@ -488,7 +489,7 @@ class JobProcessor:
             logger.error(f"Error finding pending job: {e}", exc_info=True)
             return None
 
-    def claim_job(self, job: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def claim_job(self, job: dict[str, Any]) -> dict[str, Any] | None:
         """
         Atomically claims a job by setting its status to PROCESSING
         and applying a lock timeout, using optimistic locking.
@@ -662,8 +663,8 @@ class JobProcessor:
         self,
         job: dict[str, Any],
         success: bool,
-        result: Optional[dict[str, Any]] = None,
-        error: Optional[Exception] = None,
+        result: dict[str, Any] | None = None,
+        error: Exception | None = None,
     ) -> None:
         """Mark a job as completed or failed using optimistic locking."""
         job_id = job["job_id"]

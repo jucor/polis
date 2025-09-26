@@ -18,7 +18,7 @@ repos:
     hooks:
       - id: black
         language_version: python3
-        args: [--config=pyproject.toml]
+        args: [--config=delphi/pyproject.toml]
 
   - repo: https://github.com/charliermarsh/ruff-pre-commit
     rev: v0.1.9
@@ -32,16 +32,17 @@ repos:
       - id: mypy
         additional_dependencies: [
           types-requests,
-          types-boto3,
+          types-psycopg2,
+          "boto3-stubs[dynamodb,s3]",
           pydantic,
         ]
         exclude: ^(tests/|scripts/)
 
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.7.5
+    rev: 1.8.6
     hooks:
       - id: bandit
-        args: ["-c", "pyproject.toml"]
+        args: ["-c", "delphi/pyproject.toml"]
         additional_dependencies: ["bandit[toml]"]
         exclude: ^tests/
 
@@ -59,7 +60,7 @@ repos:
           flake8-docstrings,
           flake8-import-order,
         ]
-        args: [--config=.flake8]
+        args: [--config=delphi/.flake8]
 
 ci:
   autofix_commit_msg: |

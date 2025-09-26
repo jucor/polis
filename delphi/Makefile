@@ -36,7 +36,7 @@ lint: ## Run all linters
 
 format: ## Format code
 	black .
-	ruff --fix .
+	ruff check --fix .
 	isort .
 
 type-check: ## Run type checking
@@ -48,9 +48,6 @@ security: ## Run security checks
 
 quality: ## Run all quality checks
 	lint type-check security test-unit
-
-pre-commit: ## Run pre-commit hooks on all files
-	pre-commit run --files .
 
 # Setup and maintenance
 setup-dev: install-dev ## Set up development environment

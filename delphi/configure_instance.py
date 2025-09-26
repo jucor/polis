@@ -8,10 +8,10 @@ or environment variables and sets appropriate resource limits for Delphi.
 It should be called at the beginning of run_delphi.sh script.
 """
 
-from typing import Any
 import logging
 import os
 import sys
+from typing import Any
 
 # Configure logging
 logging.basicConfig(

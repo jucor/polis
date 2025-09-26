@@ -250,7 +250,7 @@ Comprehensive exclusions for Python projects including:
 
    ```bash
    black .
-   ruff --fix .
+   ruff check --fix .
    ```
 
 2. **Check typing:**
@@ -477,6 +477,7 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.1.0",
     "mypy>=1.5.0",
+    "bandit[toml]>=1.8.0",
     # ... other dev tools
 ]
 

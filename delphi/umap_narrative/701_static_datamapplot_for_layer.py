@@ -19,6 +19,8 @@ import boto3
 import datamapplot
 import numpy as np
 from boto3.dynamodb.conditions import Key
+from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
+from typing import Any
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -35,26 +37,26 @@ except ImportError:
     )
 
     # Simplified DynamoDBStorage class if we can't import the original
-    class DynamoDBStorage:
-        def __init__(self, endpoint_url=None):
-            self.endpoint_url = endpoint_url or os.environ.get(
-                "DYNAMODB_ENDPOINT", "http://dynamodb-local:8000"
-            )
-            self.region = os.environ.get("AWS_REGION", "us-east-1")
-            self.dynamodb = boto3.resource(
-                "dynamodb", endpoint_url=self.endpoint_url, region_name=self.region
-            )
+    # class DynamoDBStorage:
+    #     def __init__(self, endpoint_url=None):
+    #         self.endpoint_url = endpoint_url or os.environ.get(
+    #             "DYNAMODB_ENDPOINT", "http://dynamodb-local:8000"
+    #         )
+    #         self.region = os.environ.get("AWS_REGION", "us-east-1")
+    #         self.dynamodb = boto3.resource(
+    #             "dynamodb", endpoint_url=self.endpoint_url, region_name=self.region
+    #         )
 
-            # Define table names using the new Delphi_ naming scheme
-            self.table_names = {
-                "comment_embeddings": "Delphi_CommentEmbeddings",
-                "comment_clusters": "Delphi_CommentHierarchicalClusterAssignments",
-                "llm_topic_names": "Delphi_CommentClustersLLMTopicNames",
-                "umap_graph": "Delphi_UMAPGraph",
-            }
+    #         # Define table names using the new Delphi_ naming scheme
+    #         self.table_names = {
+    #             "comment_embeddings": "Delphi_CommentEmbeddings",
+    #             "comment_clusters": "Delphi_CommentHierarchicalClusterAssignments",
+    #             "llm_topic_names": "Delphi_CommentClustersLLMTopicNames",
+    #             "umap_graph": "Delphi_UMAPGraph",
+    #         }
 
 
-def load_data_from_dynamo(zid, layer_id):
+def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
     """
     Load data from DynamoDB for visualization, using same approach as 700_datamapplot_for_layer.py
 
@@ -261,7 +263,7 @@ def load_data_from_dynamo(zid, layer_id):
     return data
 
 
-def load_comment_texts(zid):
+def load_comment_texts(zid: int) -> dict[str, Any]:
     """
     Load comment texts from PostgreSQL.
 
@@ -304,7 +306,7 @@ def load_comment_texts(zid):
 
 
 # Add S3 upload function
-def s3_upload_file(local_file_path, s3_key):
+def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
     """
     Upload a file to S3
 
@@ -428,14 +430,13 @@ def s3_upload_file(local_file_path, s3_key):
                 # For Docker container access to MinIO
                 url = f"{endpoint_url}/{bucket_name}/{s3_key}"
                 url = url.replace("///", "//")
+            # For AWS S3
+            elif endpoint_url.startswith("https://s3."):
+                # Standard AWS S3 endpoint
+                url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
             else:
-                # For AWS S3
-                if endpoint_url.startswith("https://s3."):
-                    # Standard AWS S3 endpoint
-                    url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
-                else:
-                    # Custom S3 endpoint
-                    url = f"{endpoint_url}/{bucket_name}/{s3_key}"
+                # Custom S3 endpoint
+                url = f"{endpoint_url}/{bucket_name}/{s3_key}"
         else:
             # Custom S3 endpoint
             url = f"{bucket_name}/{s3_key}"
@@ -451,7 +452,9 @@ def s3_upload_file(local_file_path, s3_key):
         return False
 
 
-def generate_static_datamapplot(zid, layer_num=0, output_dir=None):
+def generate_static_datamapplot(
+    zid: int, layer_num: int = 0, output_dir: str | None = None
+) -> bool:
     """Generate static datamapplot visualizations using datamapplot library"""
     logger.info(
         f"Generating static datamapplot for conversation {zid}, layer {layer_num}"
@@ -472,7 +475,6 @@ def generate_static_datamapplot(zid, layer_num=0, output_dir=None):
         # Setup output directories
         container_dir = f"/app/visualizations/{zid}"
         host_dir = f"/visualizations/{zid}"
-        local_dir = f"$HOME/polis/delphi/visualizations/{zid}"
 
         # Ensure directories exist
         os.makedirs(container_dir, exist_ok=True)
@@ -519,7 +521,7 @@ def generate_static_datamapplot(zid, layer_num=0, output_dir=None):
             hover_text.append(f"Comment {cid}: {text}")
 
         # Create label strings with topic names
-        def clean_topic_name(name):
+        def clean_topic_name(name: str) -> str:
             # Remove asterisks from topic names (e.g., "**Topic Name**" becomes "Topic Name")
             if isinstance(name, str):
                 return name.replace("*", "")
@@ -537,7 +539,7 @@ def generate_static_datamapplot(zid, layer_num=0, output_dir=None):
         label_strings = np.array(label_strings_list)
 
         # Create visualization filenames
-        static_html = f"{container_dir}/{zid}_layer_{layer_num}_datamapplot_static.html"
+        # static_html = f"{container_dir}/{zid}_layer_{layer_num}_datamapplot_static.html"
         static_png = f"{container_dir}/{zid}_layer_{layer_num}_datamapplot_static.png"
 
         # Generate datamapplot static visualization with labels over points

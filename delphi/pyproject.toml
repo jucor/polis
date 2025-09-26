@@ -65,7 +65,10 @@ dev = [
     # Code quality
     "ruff>=0.1.0",
     "black>=23.0.0",
+    "flake8>=6.0.0",
+    "isort>=5.12.0",
     "mypy>=1.5.0",
+    "bandit[toml]>=1.8.0",
     "pre-commit>=3.0.0",
     # Dependency management
     "pip-tools>=7.0.0",
@@ -190,6 +193,12 @@ ignore = [
 
 [tool.ruff.isort]
 known-first-party = ["polismath", "umap_narrative"]
+
+# isort configuration
+[tool.isort]
+profile = "black"
+known_first_party = ["polismath", "umap_narrative"]
+skip = ["delphi-dev-env", ".venv", "venv"]
 
 # MyPy type checking
 [tool.mypy]
