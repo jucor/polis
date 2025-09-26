@@ -141,7 +141,7 @@ jobs:
 
 #### Key Features
 
-- **Matrix testing** across Python 3.9, 3.10, 3.11
+- **Matrix testing** across Python 3.9, 3.10, 3.11, 3.12
 - **Service containers** for PostgreSQL and DynamoDB
 - **Coverage reporting** with Codecov integration
 - **Automated Docker builds** on successful tests
@@ -611,26 +611,32 @@ make env-check
 #### **Dockerfile Best Practices**
 
 ```dockerfile
-# Copy only pyproject.toml first for better caching
+# Copy files needed for package build (pyproject.toml needs source dirs)
 COPY pyproject.toml .
+COPY polismath/ ./polismath/
+COPY umap_narrative/ ./umap_narrative/
+COPY scripts/ ./scripts/
+COPY *.py ./
 
 # Install dependencies (cached layer)
 RUN pip install .
-
-# Copy rest of application code
-COPY . .
 ```
+
+**Important**: When using `pyproject.toml`, the build system needs access to files referenced in the project configuration:
+
+- `packages = ["polismath", "umap_narrative"]` requires these directories
+- Any files included in `[tool.hatch.build.targets.sdist]` must be available
 
 #### **Multi-stage Builds**
 
 ```dockerfile
 # Builder stage
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 COPY pyproject.toml .
 RUN pip install . --user
 
 # Runtime stage
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS runtime
 COPY --from=builder /root/.local /root/.local
 ```
 
@@ -693,7 +699,7 @@ pip show delphi-polis
 
 ```toml
 [tool.ruff]
-target-version = "py39"
+target-version = "py312"
 line-length = 88
 select = ["E", "W", "F", "I", "B", "C4", "UP", "PL"]
 ignore = ["E501", "B008", "C901", "PLR0913", "PLR0912", "PLR0915"]
@@ -704,14 +710,14 @@ ignore = ["E501", "B008", "C901", "PLR0913", "PLR0912", "PLR0915"]
 ```toml
 [tool.black]
 line-length = 88
-target-version = ["py39", "py310", "py311"]
+target-version = ["py39", "py310", "py311", "py312"]
 ```
 
 ### MyPy Configuration
 
 ```toml
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.12"
 warn_return_any = true
 disallow_untyped_defs = true
 check_untyped_defs = true

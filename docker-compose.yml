@@ -58,7 +58,7 @@ services:
       - DD_AGENT_HOST=datadog-agent
       - DD_TRACE_ENABLED=true
       - DD_SERVICE=server
-      - DD_ENV=prod 
+      - DD_ENV=prod
       - DD_LOGS_INJECTION=true
       - DD_TRACE_SAMPLE_RATE="1"
       - DD_GIT_REPOSITORY_URL="github.com/compdemocracy/polis"
@@ -116,6 +116,7 @@ services:
     image: 050917022930.dkr.ecr.us-east-1.amazonaws.com/polis/delphi:latest
     build:
       context: ./delphi
+    container_name: delphi-app
     labels:
       polis_tag: ${TAG:-dev}
       com.datadoghq.ad.logs: '[{"source": "python", "service": "delphi"}]'
@@ -155,7 +156,7 @@ services:
       - DD_SERVICE=delphi
       - DD_ENV=prod
       - DD_LOGS_INJECTION=true
-      - DD_TRACE_SAMPLE_RATE="1" 
+      - DD_TRACE_SAMPLE_RATE="1"
       - DD_GIT_REPOSITORY_URL="github.com/compdemocracy/polis"
     networks:
       - "polis-net"
@@ -273,7 +274,6 @@ services:
     # Run ollama server
     command: serve
     restart: unless-stopped
-    
 
   # MinIO S3-compatible storage
   minio:
@@ -296,7 +296,7 @@ services:
       - "polis-net"
     profiles:
       - local-services
-  
+
   # datadog
   datadog-agent:
     image: datadog/agent:7

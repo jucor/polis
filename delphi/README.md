@@ -33,8 +33,16 @@ pre-commit install
 
 For production or containerized usage:
 
+from parent directory (e.g. $HOME/polis/),
+
 ```bash
-docker-compose up -d
+make DETACH=true start
+```
+
+or with production environment:
+
+```bash
+make PROD DETACH=true start
 ```
 
 ```bash

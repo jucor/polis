@@ -5,10 +5,10 @@
 [ ] Set up Bandit
 [ ] Fix all type-check errors
 [ ] Fix all lint errors
-[ ] Fix or remove `make build`
+[x] Fix or remove `make build`
 [ ] Audit and consolidate docs
 [ ] Format all files
 [ ] Establish shared vscode settings (linter, format, etc)
 [ ] Audit and fix pytest tests
 [ ] Establish delphi tests github workflow
-[ ] Refactor make docker commands to use docker directly without docker compose
+[x] Refactor make docker commands to use docker directly without docker compose

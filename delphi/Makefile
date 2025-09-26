@@ -104,16 +104,16 @@ build: ## Build package
 
 # Docker commands
 docker-build: ## Build Docker image
-	docker build -t delphi-polis .
+	docker build -t polis/delphi:latest .
 
 docker-run: ## Run Docker container
-	docker-compose up -d
+	docker run --rm --name delphi-app --env-file .env polis/delphi:latest
 
 docker-logs: ## Show Docker logs
-	docker-compose logs -f
+	docker logs delphi-app
 
 docker-stop: ## Stop Docker containers
-	docker-compose down
+	docker stop delphi-app
 
 # Database operations
 reset-db: ## Reset all DynamoDB tables

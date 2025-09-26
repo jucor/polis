@@ -18,10 +18,8 @@ from datetime import datetime
 
 # Import from installed packages
 import evoc
-import datamapplot
-from sentence_transformers import SentenceTransformer
-from umap import UMAP
-from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
+import numpy as np
+from polismath_commentgraph.utils.converter import DataConverter
 
 # Import from local modules
 from polismath_commentgraph.utils.storage import PostgresClient, DynamoDBStorage
@@ -498,7 +496,9 @@ def create_comment_hover_info(cluster_layer, cluster_characteristics, comment_te
         hover_info: List of hover text strings for each comment
     """
     hover_info = []
-    for i, (text, cluster_id) in enumerate(zip(comment_texts, cluster_layer)):
+    for i, (text, cluster_id) in enumerate(
+        zip(comment_texts, cluster_layer, strict=False)
+    ):
         if cluster_id >= 0 and cluster_id in cluster_characteristics:
             characteristics = cluster_characteristics[cluster_id]
 
@@ -1236,7 +1236,9 @@ def create_enhanced_multilayer_index(
         )
 
         # Add links to each layer
-        for (layer_idx, num_clusters), file_path in zip(layer_info, layer_files):
+        for (layer_idx, num_clusters), file_path in zip(
+            layer_info, layer_files, strict=False
+        ):
             file_name = os.path.basename(file_path)
             basic_view_file = file_name.replace("_named.html", "_enhanced.html")
             named_view_file = file_name

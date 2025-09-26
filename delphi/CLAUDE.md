@@ -7,10 +7,11 @@ This document provides comprehensive guidance for working with the Delphi system
 For a comprehensive list of all documentation files with descriptions, see:
 [delphi/docs/DOCUMENTATION_DIRECTORY.md](docs/DOCUMENTATION_DIRECTORY.md)
 
-## Current work todos are located in:
+## Current work todos are located in
 
 delphi/docs/JOB_QUEUE_SCHEMA.md
 delphi/docs/DISTRIBUTED_SYSTEM_ROADMAP.md
+delphi/docs/BETTER_PYTHON_TODO.md
 
 ## Helpful terminology
 
@@ -57,8 +58,8 @@ Always use the commands above to determine the most substantial conversation whe
 
 ### Environment Files
 
-- Main project uses a `.env` file in the parent directory (`/Users/colinmegill/polis/.env`)
-- Example environment file is available at `/Users/colinmegill/polis/delphi/example.env`
+- Main project uses a `.env` file in the parent directory (`$HOME/polis/.env`)
+- Example environment file is available at `$HOME/polis/delphi/example.env`
 
 ### Key Environment Variables
 
@@ -72,7 +73,6 @@ Always use the commands above to determine the most substantial conversation whe
 
 - **Docker Configuration**:
 
-  - `PYTHONPATH=/app` is set in the container
   - DynamoDB local endpoint: `http://dynamodb-local:8000`
   - Ollama endpoint: `http://ollama:11434`
 
@@ -92,7 +92,7 @@ Always use the commands above to determine the most substantial conversation whe
 1. Check job results in DynamoDB to see detailed logs that don't appear in container stdout:
 
    ```bash
-   docker exec polis-dev-delphi-1 python -c "
+   docker exec delphi-app python -c "
    import boto3, json
    dynamodb = boto3.resource('dynamodb', endpoint_url='http://dynamodb:8000', region_name='us-east-1')
    table = dynamodb.Table('Delphi_JobQueue')
@@ -105,8 +105,9 @@ Always use the commands above to determine the most substantial conversation whe
    ```
 
 2. For even more detailed logs, check the job's log entries:
+
    ```bash
-   docker exec polis-dev-delphi-1 python -c "
+   docker exec delphi-app python -c "
    import boto3, json
    dynamodb = boto3.resource('dynamodb', endpoint_url='http://dynamodb:8000', region_name='us-east-1')
    table = dynamodb.Table('Delphi_JobQueue')
@@ -123,28 +124,26 @@ Always use the commands above to determine the most substantial conversation whe
 
 The system uses Docker Compose with three main services:
 
-1. `dynamodb-local`: Local DynamoDB instance for development
+1. `dynamodb`: Local DynamoDB instance for development
 2. `ollama`: Ollama service for local LLM processing
-3. `delphi-app`: Main application container
+3. `delphi`: Main application container
 
 ## DynamoDB Configuration
 
-### Docker Services
-
-- The primary DynamoDB service is defined in the main `/docker-compose.yml` file
+- The primary DynamoDB service is defined in the parent project's `/docker-compose.yml` file
 - Service name is `dynamodb` and container name is `polis-dynamodb-local`
 - Exposed on port 8000
 - Uses persistent storage via Docker volume `dynamodb-data`
 - Access URL from the host: `http://localhost:8000`
 - Access URL from Delphi containers: `http://host.docker.internal:8000`
 
-**Important Update:** The Delphi-specific DynamoDB service (`dynamodb-local` in delphi/docker-compose.yml) has been deprecated. All DynamoDB operations now use the centralized instance from the main docker-compose.yml file.
+**Important Update:** The Delphi-specific DynamoDB service (`dynamodb-local` in delphi/docker-compose.yml) has been deprecated. All DynamoDB operations now use the centralized instance from the parent project's `/docker-compose.yml` file.
 
 ### Connection Details
 
 When connecting to DynamoDB from the Delphi container, use these settings:
 
-```
+```txt
 DYNAMODB_ENDPOINT=http://host.docker.internal:8000
 AWS_ACCESS_KEY_ID=dummy
 AWS_SECRET_ACCESS_KEY=dummy
@@ -174,7 +173,7 @@ Delphi now includes a distributed job queue system built on DynamoDB:
 
    ```bash
    aws dynamodb delete-table --table-name DelphiJobQueue --endpoint-url http://localhost:8000 && \
-   docker exec -e PYTHONPATH=/app delphi-app python /app/create_dynamodb_tables.py --endpoint-url http://host.docker.internal:8000
+   docker exec delphi-app python /app/create_dynamodb_tables.py --endpoint-url http://host.docker.internal:8000
    ```
 
 4. **DynamoDB Best Practices**:
@@ -195,7 +194,7 @@ Delphi now includes a distributed job queue system built on DynamoDB:
 
 ### Key Tables
 
-#### Polis Math Tables (Now with Delphi\_ prefix):
+#### Polis Math Tables (Now with Delphi\_ prefix)
 
 - `Delphi_PCAConversationConfig` - Conversation metadata (formerly `PolisMathConversations`)
 - `Delphi_PCAResults` - PCA and cluster data (formerly `PolisMathAnalysis`)
@@ -204,7 +203,7 @@ Delphi now includes a distributed job queue system built on DynamoDB:
 - `Delphi_RepresentativeComments` - Representativeness data (formerly `PolisMathRepness`)
 - `Delphi_PCAParticipantProjections` - Participant projection data (formerly `PolisMathProjections`)
 
-#### EVōC/UMAP Tables (Now with Delphi\_ prefix):
+#### EVōC/UMAP Tables (Now with Delphi\_ prefix)
 
 - `Delphi_UMAPConversationConfig` - Metadata for conversations (formerly `ConversationMeta`)
 - `Delphi_CommentEmbeddings` - Embedding vectors for comments (formerly `CommentEmbeddings`)
@@ -218,7 +217,7 @@ Delphi now includes a distributed job queue system built on DynamoDB:
 - `Delphi_CollectiveStatement` - Collective statements generated for topics
 
 > **Note:** All table names now use the `Delphi_` prefix for consistency.
-> For complete documentation on the table renaming, see `/Users/colinmegill/polis/delphi/docs/DATABASE_NAMING_PROPOSAL.md`
+> For complete documentation on the table renaming, see `$HOME/polis/delphi/docs/DATABASE_NAMING_PROPOSAL.md`
 
 ## Reset Single Conversation
 
@@ -231,13 +230,15 @@ To completely remove all data for a single conversation from the Delphi system:
 ```
 
 Or run the comprehensive cleanup directly:
+
 ```bash
-docker exec polis-dev-delphi-1 python /app/scripts/reset_conversation.py r3p4ryckema3wfitndk6m
+docker exec delphi-app python /app/scripts/reset_conversation.py r3p4ryckema3wfitndk6m
 ```
 
 This removes data from ALL Delphi DynamoDB tables including:
+
 - Math/PCA pipeline data (clusters, projections, etc.)
-- UMAP/Topic pipeline data (embeddings, topic names, etc.) 
+- UMAP/Topic pipeline data (embeddings, topic names, etc.)
 - Narrative reports and job queue entries
 
 See [RESET_SINGLE_CONVERSATION.md](docs/RESET_SINGLE_CONVERSATION.md) for detailed documentation.
@@ -275,6 +276,7 @@ For production environments, use the job queue system:
    ```
 
 3. Monitor job status:
+
    ```bash
    ./delphi list
    ./delphi details [JOB_ID]
@@ -287,7 +289,7 @@ For production environments, use the job queue system:
    ```bash
    # Drop and recreate the table
    aws dynamodb delete-table --table-name Delphi_JobQueue --endpoint-url http://localhost:8000
-   docker exec -e PYTHONPATH=/app delphi-app python /app/create_dynamodb_tables.py --endpoint-url http://host.docker.internal:8000
+   docker exec delphi-app python /app/create_dynamodb_tables.py --endpoint-url http://host.docker.internal:8000
    ```
 
    Or use the reset_database.sh script to recreate all tables:

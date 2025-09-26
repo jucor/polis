@@ -23,7 +23,13 @@
 
   WORKDIR /app
 
+  # Copy files needed for package build (based on pyproject.toml includes)
   COPY pyproject.toml .
+  COPY polismath/ ./polismath/
+  COPY umap_narrative/ ./umap_narrative/
+  COPY scripts/ ./scripts/
+  # Copy top-level Python files referenced in pyproject.toml
+  COPY *.py ./
 
   # Conditionally install PyTorch CPU versions if IS_GITHUB_ACTION is true
   RUN if [ "$IS_GITHUB_ACTION" = "true" ]; then \
@@ -66,8 +72,8 @@
 
   ENV PYTHONDONTWRITEBYTECODE=1
   ENV PYTHONUNBUFFERED=1
-  ENV NUMBA_DISABLE_JIT=${NUMBA_DISABLE_JIT}
-  ENV AWS_REGION ${AWS_REGION:-us-east-1}
+  ENV NUMBA_DISABLE_JIT=${NUMBA_DISABLE_JIT:--1}
+  ENV AWS_REGION=${AWS_REGION:-us-east-1}
 
   RUN apt-get update && \
       apt-get install -y --no-install-recommends \
@@ -77,22 +83,22 @@
 
   WORKDIR /app
 
+  # Copy installed packages from builder stage
   COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
   COPY --from=builder /usr/local/bin /usr/local/bin
 
-  COPY polismath/ ./polismath/
-  COPY scripts/ ./scripts/
-  COPY umap_narrative/ ./umap_narrative/
+  # Copy source code from builder stage (already built into the package)
+  COPY --from=builder /app/polismath/ ./polismath/
+  COPY --from=builder /app/scripts/ ./scripts/
+  COPY --from=builder /app/umap_narrative/ ./umap_narrative/
+  COPY --from=builder /app/*.py ./
 
   RUN mkdir -p data
   EXPOSE 8080
-  ENV PYTHONPATH "${PYTHONPATH}:/app"
+  # PYTHONPATH not needed since packages are properly installed via pip
 
-  COPY run_delphi.py .
-  COPY create_dynamodb_tables.py .
-  COPY setup_minio.py .
-  COPY scripts/setup_ollama.sh ./setup_ollama.sh
-  RUN chmod +x run_delphi.py setup_ollama.sh
+  # Make scripts executable
+  RUN chmod +x run_delphi.py scripts/setup_ollama.sh
 
   CMD ["bash", "-c", "\
     echo 'Ensuring DynamoDB tables are set up (runs in all environments)...'; \
@@ -102,7 +108,7 @@
     if [ -n \"${DYNAMODB_ENDPOINT}\" ]; then \
       echo 'DYNAMODB_ENDPOINT is set, assuming local/dev environment. Running additional local setup scripts...'; \
       echo 'Setting up MinIO bucket...' && python setup_minio.py && \
-      echo 'Setting up Ollama model (local script)...' && ./setup_ollama.sh && \
+      echo 'Setting up Ollama model (local script)...' && ./scripts/setup_ollama.sh && \
       echo 'Starting job poller without ddtrace...' && \
       python scripts/job_poller.py --interval=2; \
     else \

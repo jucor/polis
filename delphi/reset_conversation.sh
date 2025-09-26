@@ -12,4 +12,4 @@ if [ $# -eq 0 ]; then
 fi
 
 # Run the Python script inside the Docker container
-docker exec polis-dev-delphi-1 python /app/scripts/reset_conversation.py "$1"
+docker exec delphi-app python /app/scripts/reset_conversation.py "$1"
