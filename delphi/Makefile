@@ -1,4 +1,4 @@
-.PHONY: help install install-dev test test-unit test-integration test-slow lint format type-check security clean build docs docker-build docker-run
+.PHONY: help install install-dev test test-unit test-integration test-slow lint format type-check security quality pre-commit clean build docs docker-build docker-run
 
 # Default target
 help: ## Show this help message
@@ -46,8 +46,11 @@ security: ## Run security checks
 	bandit -r polismath umap_narrative -f json -o bandit-report.json
 	@echo "Security report generated: bandit-report.json"
 
-# Quality gate - run before committing
-quality: lint type-check security test-unit ## Run all quality checks
+quality: ## Run all quality checks
+	lint type-check security test-unit
+
+pre-commit: ## Run pre-commit hooks on all files
+	pre-commit run --files .
 
 # Setup and maintenance
 setup-dev: install-dev ## Set up development environment

@@ -12,3 +12,5 @@
 [ ] Audit and fix pytest tests
 [ ] Establish delphi tests github workflow
 [x] Refactor make docker commands to use docker directly without docker compose
+[ ] Confirm or remove `configure_instance.py`
+[ ] Confirm or remove `setup_minio_bucket.py` (likely remove)

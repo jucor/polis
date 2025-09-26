@@ -142,7 +142,7 @@ def check_existing_extremity_values(conversation_id: int) -> dict[int, float]:
         return {}
 
 
-def print_extremity_report(extremity_values: dict[int, float]):
+def print_extremity_report(extremity_values: dict[int, float]) -> None:
     """
     Print a report of the extremity values.
 
@@ -166,12 +166,14 @@ def print_extremity_report(extremity_values: dict[int, float]):
     high_count = sum(1 for v in values_list if v >= 0.7)
 
     print("\nExtremity distribution:")
-    print(f"  Low (<0.3): {low_count} comments ({low_count/len(values_list)*100:.1f}%)")
     print(
-        f"  Medium (0.3-0.7): {mid_count} comments ({mid_count/len(values_list)*100:.1f}%)"
+        f"  Low (<0.3): {low_count} comments ({low_count / len(values_list) * 100:.1f}%)"
     )
     print(
-        f"  High (>0.7): {high_count} comments ({high_count/len(values_list)*100:.1f}%)"
+        f"  Medium (0.3-0.7): {mid_count} comments ({mid_count / len(values_list) * 100:.1f}%)"
+    )
+    print(
+        f"  High (>0.7): {high_count} comments ({high_count / len(values_list) * 100:.1f}%)"
     )
 
     # Most extreme comments
@@ -181,10 +183,10 @@ def print_extremity_report(extremity_values: dict[int, float]):
         )
         print("\nMost divisive comments (top 5):")
         for i, (tid, value) in enumerate(sorted_items[:5]):
-            print(f"  {i+1}. Comment {tid}: {value:.4f}")
+            print(f"  {i + 1}. Comment {tid}: {value:.4f}")
 
 
-def main():
+def main() -> None:
     """Main entry point for script when run directly."""
     parser = argparse.ArgumentParser(description="Calculate comment extremity values")
     parser.add_argument("--zid", type=int, required=True, help="Conversation ID")
@@ -198,7 +200,6 @@ def main():
         default=False,
         help="Whether or not to include moderated comments in reports. If false, moderated comments will appear.",
     )
-    args = parser.parse_args()
     args = parser.parse_args()
 
     # Set log level based on verbosity

@@ -71,7 +71,9 @@ dev = [
     "pip-tools>=7.0.0",
     # Type stubs
     "types-requests",
-    "types-boto3",
+    "types-psycopg2",
+    # AWS/Boto3 stubs
+    "boto3-stubs[dynamodb,s3]",
 ]
 
 notebook = [
@@ -91,6 +93,7 @@ calculate-priorities = "umap_narrative.502_calculate_priorities:main"
 # Utility entry points
 reset-conversation = "umap_narrative.reset_conversation:main"
 create-datamapplot = "umap_narrative.700_datamapplot_for_layer:main"
+setup-minio = "setup_minio:setup_minio_bucket"
 
 # Hatchling configuration
 [tool.hatch.build.targets.wheel]

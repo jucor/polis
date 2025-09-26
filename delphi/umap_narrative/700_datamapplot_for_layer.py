@@ -12,6 +12,7 @@ import argparse
 import logging
 import os
 import sys
+from typing import Any
 
 import boto3
 import numpy as np
@@ -22,7 +23,7 @@ from botocore.exceptions import ClientError
 from polismath_commentgraph.utils.storage import DynamoDBStorage, PostgresClient
 
 
-def s3_upload_file(local_file_path: str, s3_key: str) -> str or bool:
+def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
     """
     Uploads a file to an S3-compatible object store, handling both local and
     AWS environments holistically.
@@ -139,7 +140,7 @@ logger = logging.getLogger(__name__)
 
 
 # Add a file handler to log to a file as well
-def setup_file_logging(zid):
+def setup_file_logging(zid: int) -> None:
     """Set up file logging for a specific conversation."""
     try:
         # Create log directory if it doesn't exist
@@ -165,7 +166,7 @@ def setup_file_logging(zid):
 
 
 # Function to log the Python environment
-def log_environment_info():
+def log_environment_info() -> None:
     """Log information about the Python environment."""
     try:
         logger.info(f"Python version: {sys.version}")
@@ -187,13 +188,12 @@ def log_environment_info():
 
 
 # Import these modules here to avoid circular imports
-import sys
 import time
 
 
 def setup_environment(
     db_host=None, db_port=None, db_name=None, db_user=None, db_password=None
-):
+) -> None:
     """Set up environment variables for database connections."""
     # PostgreSQL settings
     if db_host:
@@ -247,7 +247,7 @@ def setup_environment(
     logger.info(f"- Region: {os.environ.get('AWS_REGION')}")
 
 
-def load_comment_texts(zid):
+def load_comment_texts(zid) -> dict[int, str] | None:
     """
     Load comment texts from PostgreSQL.
 
@@ -288,7 +288,9 @@ def load_comment_texts(zid):
         postgres_client.shutdown()
 
 
-def load_conversation_data_from_dynamo(zid, layer_id, dynamo_storage):
+def load_conversation_data_from_dynamo(
+    zid, layer_id, dynamo_storage
+) -> dict[str, Any] | None:
     """
     Load data from DynamoDB for a specific conversation and layer.
 
@@ -637,7 +639,9 @@ def load_conversation_data_from_dynamo(zid, layer_id, dynamo_storage):
     return data
 
 
-def create_visualization(zid, layer_id, data, comment_texts, output_dir=None):
+def create_visualization(
+    zid, layer_id, data, comment_texts, output_dir=None
+) -> str | None:
     """
     Create and save a visualization for a specific layer.
 
@@ -912,7 +916,9 @@ def create_visualization(zid, layer_id, data, comment_texts, output_dir=None):
         return None
 
 
-def generate_visualization(zid, layer_id=0, output_dir=None, dynamo_endpoint=None):
+def generate_visualization(
+    zid, layer_id=0, output_dir=None, dynamo_endpoint=None
+) -> str | None:
     """
     Generate visualization for a specific conversation and layer.
 
@@ -1023,7 +1029,7 @@ def generate_visualization(zid, layer_id=0, output_dir=None, dynamo_endpoint=Non
         return None
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
         description="Generate DataMapPlot visualization for a layer of a conversation"

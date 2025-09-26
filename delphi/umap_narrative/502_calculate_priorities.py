@@ -304,7 +304,7 @@ class PriorityCalculator:
             return False
 
 
-def main():
+def main() -> None:
     """Main function."""
     parser = argparse.ArgumentParser(
         description="Calculate comment priorities using group-based extremity"

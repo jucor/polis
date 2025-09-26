@@ -6,14 +6,13 @@ This script fetches conversation data from PostgreSQL, processes it using
 EVōC for clustering, and generates interactive visualizations with topic labeling.
 """
 
-import os
-import json
-import uuid  # For generating job_id
-import time
-import logging
-import random
 import hashlib
-import numpy as np
+import json
+import logging
+import os
+import random
+import time
+import uuid  # For generating job_id
 from datetime import datetime
 
 # Import from installed packages
@@ -22,8 +21,7 @@ import numpy as np
 from polismath_commentgraph.utils.converter import DataConverter
 
 # Import from local modules
-from polismath_commentgraph.utils.storage import PostgresClient, DynamoDBStorage
-from polismath_commentgraph.utils.converter import DataConverter
+from polismath_commentgraph.utils.storage import DynamoDBStorage, PostgresClient
 
 # Configure logging
 logging.basicConfig(
@@ -408,7 +406,7 @@ def generate_cluster_topic_labels(
                 # Deterministic pseudo-random sample of up to 5 indices per (conversation, layer, cluster)
                 if len(cluster_indices_list) > 5:
                     seed_material = (
-                        f"{conversation_name}|{layer_idx}|{cluster_id}".encode("utf-8")
+                        f"{conversation_name}|{layer_idx}|{cluster_id}".encode()
                     )
                     seed_int = int(hashlib.sha1(seed_material).hexdigest(), 16) % (
                         2**32
@@ -1306,7 +1304,7 @@ def create_enhanced_multilayer_index(
 
 def process_conversation(
     zid, export_dynamo=True, use_ollama=False, include_moderation=False
-):
+) -> bool:
     """
     Main function to process a conversation and generate visualizations.
 
@@ -1436,7 +1434,7 @@ def process_conversation(
     return True
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     # Parse arguments
     import argparse

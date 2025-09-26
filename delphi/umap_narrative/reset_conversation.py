@@ -18,13 +18,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def get_boto_resource(service_name: str):
+def get_boto_resource(service_name: str) -> boto3.resource:
     """
     Creates a boto3 resource, automatically using the correct endpoint
     and credentials for local vs. AWS environments.
     """
     resource_args = {"region_name": os.environ.get("AWS_REGION", "us-east-1")}
-    endpoint_url = None
+    endpoint_url: str | None = None
 
     if service_name == "s3":
         endpoint_url = os.environ.get("AWS_S3_ENDPOINT")
@@ -46,7 +46,7 @@ def get_boto_resource(service_name: str):
     return boto3.resource(service_name, **resource_args)
 
 
-def delete_dynamodb_data(conversation_id: str, report_id: str = None):
+def delete_dynamodb_data(conversation_id: str, report_id: str = None) -> int:
     """
     Deletes all data from DynamoDB tables for a given conversation_id.
     This function handles multiple key structures and uses efficient batch deletion.
@@ -54,7 +54,7 @@ def delete_dynamodb_data(conversation_id: str, report_id: str = None):
     dynamodb = get_boto_resource("dynamodb")
     total_deleted_count = 0
 
-    def batch_delete_items(table, items, primary_keys):
+    def batch_delete_items(table, items, primary_keys) -> int:
         """Helper to perform batch deletion and handle errors."""
         if not items:
             return 0
@@ -212,7 +212,7 @@ def delete_dynamodb_data(conversation_id: str, report_id: str = None):
     return total_deleted_count
 
 
-def delete_s3_data(bucket_name: str, report_id: str):
+def delete_s3_data(bucket_name: str, report_id: str) -> int:
     """
     Deletes all visualization files from S3/MinIO for a given report_id.
     """
@@ -256,7 +256,7 @@ def delete_s3_data(bucket_name: str, report_id: str):
         return 0
 
 
-def main(zid: str, rid: str = None):
+def main(zid: str, rid: str = None) -> None:
     """
     Main function to coordinate the deletion process.
     """
