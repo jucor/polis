@@ -7,11 +7,18 @@ import json
 import logging
 import os
 import time
+import traceback
 from datetime import datetime
 
+import evoc
 import numpy as np
+import pandas as pd
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import KMeans
 
-from .utils.storage import PostgresClient
+from .lambda_handler import clustering_engine, embedding_engine, lambda_handler, parse_event
+from .utils.converter import DataConverter
+from .utils.storage import DynamoDBStorage, PostgresClient
 
 # Configure logging
 logging.basicConfig(
@@ -29,10 +36,6 @@ def test_evoc(args):
     Args:
         args: Command-line arguments
     """
-    import evoc
-    import pandas as pd
-    from sentence_transformers import SentenceTransformer
-
     # Test with both biodiversity (small) and bg2050 (large) datasets
     datasets = [
         {
@@ -107,12 +110,7 @@ def test_evoc(args):
             # IMPORTANT: We're using the same fallback approach as the working code
             # This is necessary because EVOC itself appears to have an issue with certain datasets
             logger.error(f"EVOC clustering failed: {e}")
-            logger.info(
-                "Using KMeans fallback for demonstration (as in working examples)"
-            )
-
-            from sklearn.cluster import KMeans
-
+            logger.info("Using KMeans fallback for demonstration (as in working examples)")
             kmeans = KMeans(n_clusters=5, random_state=42)
             cluster_labels = kmeans.fit_predict(document_vectors)
 
@@ -140,9 +138,7 @@ def test_evoc(args):
                 num_layer_clusters = len(np.unique(layer))
                 num_layer_noise = 0
 
-            logger.info(
-                f"Layer {i}: {num_layer_clusters} clusters, {num_layer_noise} noise points"
-            )
+            logger.info(f"Layer {i}: {num_layer_clusters} clusters, {num_layer_noise} noise points")
 
     logger.info("\nEVOC testing on real datasets completed successfully")
 
@@ -177,9 +173,7 @@ def test_postgres(args):
             # Test conversation lookup
             conversation = pg_client.get_conversation_by_id(args.zid)
             if conversation:
-                logger.info(
-                    f"Found conversation: {json.dumps(conversation, default=str)}"
-                )
+                logger.info(f"Found conversation: {json.dumps(conversation, default=str)}")
 
                 # Get comments
                 comments = pg_client.get_comments_by_conversation(args.zid)
@@ -214,9 +208,7 @@ def test_postgres(args):
 
                 # Get conversation details
                 conversation = pg_client.get_conversation_by_id(zid)
-                logger.info(
-                    f"Found conversation: {json.dumps(conversation, default=str)}"
-                )
+                logger.info(f"Found conversation: {json.dumps(conversation, default=str)}")
 
                 return {
                     "success": True,
@@ -233,17 +225,13 @@ def test_postgres(args):
         else:
             # Test a generic query
             logger.info("Testing query execution")
-            result = pg_client.query(
-                "SELECT current_timestamp as time, version() as version"
-            )
+            result = pg_client.query("SELECT current_timestamp as time, version() as version")
             logger.info(f"Query result: {json.dumps(result, default=str)}")
 
             return {"success": True, "query_result": result}
 
     except Exception as e:
         logger.error(f"PostgreSQL test failed: {str(e)}")
-        import traceback
-
         logger.error(traceback.format_exc())
 
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
@@ -314,19 +302,12 @@ def lambda_local(args):
     os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
 
     # Reinitialize the DynamoDB storage with direct credentials
-    from .utils.storage import DynamoDBStorage
-
     global dynamo_storage
-    dynamo_storage = DynamoDBStorage(
-        region_name="us-east-1", endpoint_url=os.environ.get("DYNAMODB_ENDPOINT")
-    )
+    dynamo_storage = DynamoDBStorage(region_name="us-east-1", endpoint_url=os.environ.get("DYNAMODB_ENDPOINT"))
 
     # Import the handler
-    from .lambda_handler import lambda_handler
 
     # Initialize PostgreSQL client if needed
-    from .utils.storage import PostgresClient
-
     global postgres_client
     postgres_client = PostgresClient()
 
@@ -336,16 +317,7 @@ def lambda_local(args):
     def process_with_local_dynamo(conversation_id: str):
         # This is a modified version of process_conversation that uses our dynamo_storage
         global dynamo_storage
-        # Import necessary modules
-        from datetime import datetime
-
-        import numpy as np
-
-        from .lambda_handler import clustering_engine, embedding_engine
-
         # Use the original code but with our dynamo_storage
-        from .utils.converter import DataConverter
-
         start_time = time.time()
         logger.info(f"Processing conversation: {conversation_id}")
 
@@ -375,9 +347,7 @@ def lambda_local(args):
 
             # Log active/inactive comment counts
             active_comments = [c for c in filtered_comments if c.get("active", True)]
-            inactive_comments = [
-                c for c in filtered_comments if not c.get("active", True)
-            ]
+            inactive_comments = [c for c in filtered_comments if not c.get("active", True)]
 
             logger.info(f"Processing {len(filtered_comments)} comments total:")
             logger.info(f"- {len(active_comments)} active comments")
@@ -403,9 +373,7 @@ def lambda_local(args):
             # Create clustering layers
             logger.info("Creating clustering layers")
             clustering_start = time.time()
-            cluster_layers = clustering_engine.create_clustering_layers(
-                embeddings, num_layers=4
-            )
+            cluster_layers = clustering_engine.create_clustering_layers(embeddings, num_layers=4)
             clustering_time = time.time() - clustering_start
             logger.info(f"Clustering completed in {clustering_time:.2f}s")
 
@@ -414,12 +382,8 @@ def lambda_local(args):
                 "conversation_name": conversation_id,
                 "processed_date": datetime.now().isoformat(),
                 "num_comments": len(comments),
-                "num_clusters": len(
-                    np.unique(cluster_layers[0][cluster_layers[0] >= 0])
-                ),
-                "cluster_layers": [
-                    len(np.unique(layer[layer >= 0])) for layer in cluster_layers
-                ],
+                "num_clusters": len(np.unique(cluster_layers[0][cluster_layers[0] >= 0])),
+                "cluster_layers": [len(np.unique(layer[layer >= 0])) for layer in cluster_layers],
             }
 
             # Store in DynamoDB
@@ -433,26 +397,18 @@ def lambda_local(args):
             dynamo_storage.create_conversation_meta(conversation_meta)
 
             # Convert and store embeddings
-            embedding_models = DataConverter.batch_convert_embeddings(
-                conversation_id, embeddings, projection
-            )
+            embedding_models = DataConverter.batch_convert_embeddings(conversation_id, embeddings, projection)
 
             # Batch store embeddings
             result = dynamo_storage.batch_create_comment_embeddings(embedding_models)
-            logger.info(
-                f"Stored {result['success']} embeddings with {result['failure']} failures"
-            )
+            logger.info(f"Stored {result['success']} embeddings with {result['failure']} failures")
 
             # Convert and store clusters
-            cluster_models = DataConverter.batch_convert_clusters(
-                conversation_id, cluster_layers, projection
-            )
+            cluster_models = DataConverter.batch_convert_clusters(conversation_id, cluster_layers, projection)
 
             # Batch store clusters
             result = dynamo_storage.batch_create_comment_clusters(cluster_models)
-            logger.info(
-                f"Stored {result['success']} cluster assignments with {result['failure']} failures"
-            )
+            logger.info(f"Stored {result['success']} cluster assignments with {result['failure']} failures")
 
             # Convert and store topics
             topic_models = DataConverter.batch_convert_topics(
@@ -466,9 +422,7 @@ def lambda_local(args):
 
             # Batch store topics
             result = dynamo_storage.batch_create_cluster_topics(topic_models)
-            logger.info(
-                f"Stored {result['success']} topics with {result['failure']} failures"
-            )
+            logger.info(f"Stored {result['success']} topics with {result['failure']} failures")
 
             # Create comment texts and store
             text_models = []
@@ -484,9 +438,7 @@ def lambda_local(args):
 
             # Store texts
             result = dynamo_storage.batch_create_comment_texts(text_models)
-            logger.info(
-                f"Stored {result['success']} comment texts with {result['failure']} failures"
-            )
+            logger.info(f"Stored {result['success']} comment texts with {result['failure']} failures")
 
             dynamo_time = time.time() - dynamo_start
             logger.info(f"DynamoDB storage completed in {dynamo_time:.2f}s")
@@ -508,8 +460,6 @@ def lambda_local(args):
                 },
             }
         except Exception as e:
-            import traceback
-
             logger.error(f"Error processing conversation: {str(e)}")
             logger.error(traceback.format_exc())
             return {
@@ -521,13 +471,10 @@ def lambda_local(args):
 
     # Override lambda_handler to use our process_with_local_dynamo
     if args.event_type == "process_conversation":
-
         # Create a custom handler that uses our function
         def lambda_with_local_dynamo(event, context):
             try:
                 # Parse the incoming event
-                from .lambda_handler import parse_event
-
                 data = parse_event(event)
 
                 # Get conversation ID
@@ -535,9 +482,7 @@ def lambda_local(args):
                 if not conversation_id:
                     return {
                         "statusCode": 400,
-                        "body": json.dumps(
-                            {"error": "Missing conversation_id", "event": event}
-                        ),
+                        "body": json.dumps({"error": "Missing conversation_id", "event": event}),
                     }
 
                 # Process with our local function
@@ -545,8 +490,6 @@ def lambda_local(args):
 
                 return {"statusCode": 200, "body": json.dumps(result, default=str)}
             except Exception as e:
-                import traceback
-
                 logger.error(f"Error processing Lambda event: {str(e)}")
                 logger.error(traceback.format_exc())
 
@@ -567,8 +510,6 @@ def lambda_local(args):
         end_time = time.time()
     else:
         # For other event types, use the original handler
-        from .lambda_handler import lambda_handler
-
         # Execute the handler
         start_time = time.time()
         result = lambda_handler(event, context)
@@ -585,23 +526,13 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # Test EVOC wrapper command
-    test_parser = subparsers.add_parser(
-        "test-evoc", help="Test EVOC wrapper implementation"
-    )
-    test_parser.add_argument(
-        "--min-cluster-size", type=int, default=5, help="Minimum cluster size"
-    )
-    test_parser.add_argument(
-        "--min-samples", type=int, default=5, help="Minimum samples"
-    )
-    test_parser.add_argument(
-        "--num-layers", type=int, default=4, help="Number of cluster layers"
-    )
+    test_parser = subparsers.add_parser("test-evoc", help="Test EVOC wrapper implementation")
+    test_parser.add_argument("--min-cluster-size", type=int, default=5, help="Minimum cluster size")
+    test_parser.add_argument("--min-samples", type=int, default=5, help="Minimum samples")
+    test_parser.add_argument("--num-layers", type=int, default=4, help="Number of cluster layers")
 
     # Test PostgreSQL connection
-    postgres_parser = subparsers.add_parser(
-        "test-postgres", help="Test PostgreSQL connection"
-    )
+    postgres_parser = subparsers.add_parser("test-postgres", help="Test PostgreSQL connection")
     postgres_parser.add_argument(
         "--pg-host",
         default=os.environ.get("DATABASE_HOST", "localhost"),
@@ -628,29 +559,19 @@ def main():
         default=os.environ.get("DATABASE_PASSWORD", ""),
         help="PostgreSQL password",
     )
-    postgres_parser.add_argument(
-        "--zid", type=int, help="Test with a specific conversation ID"
-    )
-    postgres_parser.add_argument(
-        "--zinvite", help="Test with a specific conversation invite code"
-    )
+    postgres_parser.add_argument("--zid", type=int, help="Test with a specific conversation ID")
+    postgres_parser.add_argument("--zinvite", help="Test with a specific conversation invite code")
 
     # Run Lambda handler locally
-    lambda_parser = subparsers.add_parser(
-        "lambda-local", help="Run Lambda handler locally"
-    )
+    lambda_parser = subparsers.add_parser("lambda-local", help="Run Lambda handler locally")
     lambda_parser.add_argument(
         "--event-type",
         choices=["process_conversation", "process_comment"],
         default="process_conversation",
         help="Type of event to simulate",
     )
-    lambda_parser.add_argument(
-        "--conversation-id", required=True, help="Conversation ID"
-    )
-    lambda_parser.add_argument(
-        "--comment-id", type=int, help="Comment ID (for process_comment)"
-    )
+    lambda_parser.add_argument("--conversation-id", required=True, help="Conversation ID")
+    lambda_parser.add_argument("--comment-id", type=int, help="Comment ID (for process_comment)")
     lambda_parser.add_argument("--text", help="Comment text (for process_comment)")
     lambda_parser.add_argument("--author-id", help="Author ID (for process_comment)")
     lambda_parser.add_argument("--pg-host", help="PostgreSQL host")

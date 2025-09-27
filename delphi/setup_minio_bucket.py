@@ -7,16 +7,18 @@ Run this script after starting the MinIO container to ensure the bucket exists.
 import logging
 import os
 import sys
+import traceback
+from typing import Any
 
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from mypy_boto3_s3.client import S3Client
+
+# Use flexible typing for boto3 clients
+S3Client = Any
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +58,7 @@ def setup_minio_bucket() -> bool:
             error_code = e.response.get("Error", {}).get("Code")
 
             # If bucket doesn't exist (404) or we're not allowed to access it (403)
-            if error_code == "404" or error_code == "403":
+            if error_code in ["403", "404"]:
                 logger.info(f"Creating bucket '{bucket_name}'...")
                 # Create bucket
                 if region == "us-east-1":
@@ -76,9 +78,7 @@ def setup_minio_bucket() -> bool:
         # For this use case, we'll leave the bucket private
 
         # Upload a test file to verify bucket is working
-        test_file_path = os.path.join(
-            os.path.dirname(__file__), "setup_minio_bucket.py"
-        )
+        test_file_path = os.path.join(os.path.dirname(__file__), "setup_minio_bucket.py")
         test_key = "test/setup_script.py"
 
         logger.info("Uploading test file to verify bucket...")
@@ -94,7 +94,6 @@ def setup_minio_bucket() -> bool:
         return True
     except Exception as e:
         logger.error(f"Error setting up MinIO bucket: {e}")
-        import traceback
 
         logger.error(traceback.format_exc())
         return False

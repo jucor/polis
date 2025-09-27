@@ -14,17 +14,17 @@ import logging
 import os
 import sys
 import traceback
+from typing import Any
 
 import boto3
 import datamapplot
 import numpy as np
 from boto3.dynamodb.conditions import Key
-from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
-from typing import Any
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# Use flexible typing for boto3 resources
+DynamoDBResource = Any
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Import directly from the existing codebase
@@ -32,9 +32,7 @@ sys.path.insert(0, "/app")
 try:
     from polismath_commentgraph.utils.storage import DynamoDBStorage, PostgresClient
 except ImportError:
-    logger.warning(
-        "Could not import from polismath_commentgraph - running in standalone mode"
-    )
+    logger.warning("Could not import from polismath_commentgraph - running in standalone mode")
 
     # Simplified DynamoDBStorage class if we can't import the original
     # class DynamoDBStorage:
@@ -65,9 +63,7 @@ def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
     logger.info(f"Loading data from DynamoDB for conversation {zid}, layer {layer_id}")
 
     # Initialize DynamoDB storage
-    dynamo_storage = DynamoDBStorage(
-        endpoint_url=os.environ.get("DYNAMODB_ENDPOINT", "http://dynamodb-local:8000")
-    )
+    dynamo_storage = DynamoDBStorage(endpoint_url=os.environ.get("DYNAMODB_ENDPOINT", "http://dynamodb-local:8000"))
 
     # Initialize data dictionary
     data = {"comment_positions": {}, "cluster_assignments": {}, "topic_names": {}}
@@ -76,16 +72,10 @@ def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
     try:
         # Query CommentClusters for this conversation
         logger.info("Loading cluster assignments from CommentClusters...")
-        table = dynamo_storage.dynamodb.Table(
-            dynamo_storage.table_names["comment_clusters"]
-        )
-        logger.info(
-            f"CommentClusters table name: {dynamo_storage.table_names['comment_clusters']}"
-        )
+        table = dynamo_storage.dynamodb.Table(dynamo_storage.table_names["comment_clusters"])
+        logger.info(f"CommentClusters table name: {dynamo_storage.table_names['comment_clusters']}")
 
-        response = table.query(
-            KeyConditionExpression=Key("conversation_id").eq(str(zid))
-        )
+        response = table.query(KeyConditionExpression=Key("conversation_id").eq(str(zid)))
         clusters = response.get("Items", [])
 
         # Handle pagination if needed
@@ -99,20 +89,14 @@ def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
         logger.info(f"Retrieved {len(clusters)} comment cluster assignments")
 
         # Check if any items have position data
-        position_items = [
-            item
-            for item in clusters
-            if "position" in item and isinstance(item["position"], dict)
-        ]
+        position_items = [item for item in clusters if "position" in item and isinstance(item["position"], dict)]
         logger.info(f"Number of items with position field: {len(position_items)}")
 
         # Extract positions and cluster assignments for the specified layer
         position_column = "position"
         cluster_column = f"layer{layer_id}_cluster_id"
 
-        logger.info(
-            f"Looking for position column '{position_column}' and cluster column '{cluster_column}'"
-        )
+        logger.info(f"Looking for position column '{position_column}' and cluster column '{cluster_column}'")
         positions_found = 0
         clusters_found = 0
 
@@ -138,29 +122,19 @@ def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
                 data["cluster_assignments"][comment_id] = int(item[cluster_column])
                 clusters_found += 1
 
-        logger.info(
-            f"Extracted {positions_found} positions and {clusters_found} cluster assignments"
-        )
+        logger.info(f"Extracted {positions_found} positions and {clusters_found} cluster assignments")
 
         # If positions were not found, try to get them from UMAP graph
         if len(data["comment_positions"]) == 0:
-            logger.info(
-                "No positions found in CommentClusters, fetching from UMAPGraph..."
-            )
+            logger.info("No positions found in CommentClusters, fetching from UMAPGraph...")
 
             # Try to get positions from the UMAPGraph table
             try:
                 # Get all edges from UMAPGraph for this conversation
-                umap_table = dynamo_storage.dynamodb.Table(
-                    dynamo_storage.table_names["umap_graph"]
-                )
-                logger.info(
-                    f"UMAPGraph table name: {dynamo_storage.table_names['umap_graph']}"
-                )
+                umap_table = dynamo_storage.dynamodb.Table(dynamo_storage.table_names["umap_graph"])
+                logger.info(f"UMAPGraph table name: {dynamo_storage.table_names['umap_graph']}")
 
-                response = umap_table.query(
-                    KeyConditionExpression=Key("conversation_id").eq(str(zid))
-                )
+                response = umap_table.query(KeyConditionExpression=Key("conversation_id").eq(str(zid)))
                 edges = response.get("Items", [])
 
                 # Handle pagination if needed
@@ -190,9 +164,7 @@ def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
                         # Check if this is a self-referencing edge
                         is_self_ref = False
                         if "source_id" in edge and "target_id" in edge:
-                            is_self_ref = str(edge["source_id"]) == str(
-                                edge["target_id"]
-                            )
+                            is_self_ref = str(edge["source_id"]) == str(edge["target_id"])
 
                         # Only self-referencing edges contain the position data
                         if is_self_ref:
@@ -200,18 +172,14 @@ def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
                             positions[comment_id] = [float(pos["x"]), float(pos["y"])]
                             position_count += 1
 
-                logger.info(
-                    f"Extracted {position_count} positions from self-referencing edges"
-                )
+                logger.info(f"Extracted {position_count} positions from self-referencing edges")
 
                 # Map positions to comment IDs
                 for comment_id in data["cluster_assignments"].keys():
                     if comment_id in positions:
                         data["comment_positions"][comment_id] = positions[comment_id]
 
-                logger.info(
-                    f"Extracted {len(data['comment_positions'])} positions from UMAPGraph"
-                )
+                logger.info(f"Extracted {len(data['comment_positions'])} positions from UMAPGraph")
             except Exception as e:
                 logger.error(f"Error retrieving positions from UMAPGraph: {e}")
                 logger.error(traceback.format_exc())
@@ -223,16 +191,10 @@ def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
     try:
         # Query LLMTopicNames for this conversation and layer
         logger.info("Loading topic names from LLMTopicNames...")
-        table = dynamo_storage.dynamodb.Table(
-            dynamo_storage.table_names["llm_topic_names"]
-        )
-        logger.info(
-            f"LLMTopicNames table name: {dynamo_storage.table_names['llm_topic_names']}"
-        )
+        table = dynamo_storage.dynamodb.Table(dynamo_storage.table_names["llm_topic_names"])
+        logger.info(f"LLMTopicNames table name: {dynamo_storage.table_names['llm_topic_names']}")
 
-        response = table.query(
-            KeyConditionExpression=Key("conversation_id").eq(str(zid))
-        )
+        response = table.query(KeyConditionExpression=Key("conversation_id").eq(str(zid)))
         topic_names = response.get("Items", [])
 
         # Handle pagination if needed
@@ -253,9 +215,7 @@ def load_data_from_dynamo(zid: int, layer_id: int) -> dict[str, Any]:
                     data["topic_names"][int(cluster_id)] = topic_name
                     topic_count += 1
 
-        logger.info(
-            f"Retrieved {len(data['topic_names'])} topic names for layer {layer_id}"
-        )
+        logger.info(f"Retrieved {len(data['topic_names'])} topic names for layer {layer_id}")
     except Exception as e:
         logger.error(f"Error retrieving topic names: {e}")
         logger.error(traceback.format_exc())
@@ -288,9 +248,7 @@ def load_comment_texts(zid: int) -> dict[str, Any]:
             return {}
 
         # Create a dictionary of comment_id to text
-        comment_dict = {
-            comment["tid"]: comment["txt"] for comment in comments if comment.get("txt")
-        }
+        comment_dict = {comment["tid"]: comment["txt"] for comment in comments if comment.get("txt")}
 
         logger.info(f"Loaded {len(comment_dict)} comments from PostgreSQL")
         return comment_dict
@@ -351,18 +309,12 @@ def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
             s3_client.head_bucket(Bucket=bucket_name)
             logger.info(f"Bucket {bucket_name} exists")
         except Exception as e:
-            logger.info(
-                f"Bucket {bucket_name} doesn't exist or not accessible, creating... Error: {e}"
-            )
+            logger.info(f"Bucket {bucket_name} doesn't exist or not accessible, creating... Error: {e}")
 
             try:
                 # Create the bucket - for MinIO local we don't need LocationConstraint
                 if endpoint_url:
-                    if (
-                        region == "us-east-1"
-                        or "localhost" in endpoint_url
-                        or "minio" in endpoint_url
-                    ):
+                    if region == "us-east-1" or "localhost" in endpoint_url or "minio" in endpoint_url:
                         s3_client.create_bucket(Bucket=bucket_name)
                 else:
                     s3_client.create_bucket(
@@ -386,9 +338,7 @@ def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
 
                 # Set the bucket policy
                 try:
-                    s3_client.put_bucket_policy(
-                        Bucket=bucket_name, Policy=json.dumps(bucket_policy)
-                    )
+                    s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(bucket_policy))
                     logger.info(f"Set public-read bucket policy for {bucket_name}")
                 except Exception as policy_error:
                     logger.warning(f"Could not set bucket policy: {policy_error}")
@@ -413,15 +363,11 @@ def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
         elif local_file_path.endswith(".svg"):
             extra_args["ContentType"] = "image/svg+xml"
 
-        s3_client.upload_file(
-            local_file_path, bucket_name, s3_key, ExtraArgs=extra_args
-        )
+        s3_client.upload_file(local_file_path, bucket_name, s3_key, ExtraArgs=extra_args)
 
         if endpoint_url:
             # Generate a URL for the uploaded file
-            if endpoint_url.startswith("http://localhost") or endpoint_url.startswith(
-                "http://127.0.0.1"
-            ):
+            if endpoint_url.startswith("http://localhost") or endpoint_url.startswith("http://127.0.0.1"):
                 # For local development with MinIO
                 url = f"{endpoint_url}/{bucket_name}/{s3_key}"
                 # Clean up URL if needed
@@ -452,13 +398,9 @@ def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
         return False
 
 
-def generate_static_datamapplot(
-    zid: int, layer_num: int = 0, output_dir: str | None = None
-) -> bool:
+def generate_static_datamapplot(zid: int, layer_num: int = 0, output_dir: str | None = None) -> bool:
     """Generate static datamapplot visualizations using datamapplot library"""
-    logger.info(
-        f"Generating static datamapplot for conversation {zid}, layer {layer_num}"
-    )
+    logger.info(f"Generating static datamapplot for conversation {zid}, layer {layer_num}")
 
     try:
         # Load data from DynamoDB
@@ -530,9 +472,7 @@ def generate_static_datamapplot(
         label_strings_list = []
         for label in cluster_labels:
             if label >= 0:
-                label_strings_list.append(
-                    clean_topic_name(topic_names.get(label, f"Topic {label}"))
-                )
+                label_strings_list.append(clean_topic_name(topic_names.get(label, f"Topic {label}")))
             else:
                 label_strings_list.append("Unclustered")
 
@@ -546,9 +486,7 @@ def generate_static_datamapplot(
         logger.info("Creating static visualization with labels over points...")
 
         # Generate static visualization with datamapplot.create_plot
-        logger.info(
-            "Creating truly static visualization with datamapplot.create_plot..."
-        )
+        logger.info("Creating truly static visualization with datamapplot.create_plot...")
 
         # Generate the static plot - it returns (fig, ax) tuple
         fig, ax = datamapplot.create_plot(
@@ -574,9 +512,7 @@ def generate_static_datamapplot(
         logger.info(f"Saved static PNG to {static_png}")
 
         # Save a higher resolution version for presentations
-        presentation_png = (
-            f"{container_dir}/{zid}_layer_{layer_num}_datamapplot_presentation.png"
-        )
+        presentation_png = f"{container_dir}/{zid}_layer_{layer_num}_datamapplot_presentation.png"
         fig.savefig(presentation_png, dpi=600, bbox_inches="tight")
         logger.info(f"Saved high-resolution PNG to {presentation_png}")
 
@@ -624,9 +560,7 @@ def generate_static_datamapplot(
 
             # Save S3 URLs to a JSON file for reference
             if s3_urls:
-                url_file = os.path.join(
-                    container_dir, f"{zid}_layer_{layer_num}_s3_urls.json"
-                )
+                url_file = os.path.join(container_dir, f"{zid}_layer_{layer_num}_s3_urls.json")
                 with open(url_file, "w") as f:
                     json.dump(s3_urls, f, indent=2)
                 logger.info(f"S3 URLs saved to {url_file}")

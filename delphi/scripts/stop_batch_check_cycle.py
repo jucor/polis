@@ -45,10 +45,12 @@ from datetime import datetime
 from typing import Any
 
 import boto3
-from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
+
+# Use flexible typing for boto3 resources
+DynamoDBResource = Any
 
 
-def get_dynamodb_resource() -> DynamoDBServiceResource:
+def get_dynamodb_resource() -> DynamoDBResource:
     """Get DynamoDB resource with proper configuration."""
     endpoint_url = os.environ.get("DYNAMODB_ENDPOINT", "http://dynamodb:8000")
 
@@ -65,9 +67,7 @@ def get_dynamodb_resource() -> DynamoDBServiceResource:
     )
 
 
-def stop_batch_check_cycle(
-    batch_job_id: str, dry_run: bool = False
-) -> tuple[bool, str, dict[str, Any]]:
+def stop_batch_check_cycle(batch_job_id: str, dry_run: bool = False) -> tuple[bool, str, dict[str, Any]]:
     """
     Stop the infinite batch check cycle for a given batch job.
 
@@ -81,7 +81,7 @@ def stop_batch_check_cycle(
     dynamodb = get_dynamodb_resource()
     table = dynamodb.Table("Delphi_JobQueue")
 
-    stats = {
+    stats: dict[str, Any] = {
         "batch_checks_found": 0,
         "batch_checks_deleted": 0,
         "other_jobs_found": 0,
@@ -90,9 +90,7 @@ def stop_batch_check_cycle(
         "errors": [],
     }
 
-    print(
-        f"\n{'[DRY RUN] ' if dry_run else ''}Stopping batch check cycle for: {batch_job_id}"
-    )
+    print(f"\n{'[DRY RUN] ' if dry_run else ''}Stopping batch check cycle for: {batch_job_id}")
     print("=" * 80)
 
     try:
@@ -139,16 +137,12 @@ def stop_batch_check_cycle(
 
         # Step 2: Delete batch_check jobs
         if batch_check_jobs:
-            print(
-                f"\n2. {'Would delete' if dry_run else 'Deleting'} {len(batch_check_jobs)} batch_check jobs..."
-            )
+            print(f"\n2. {'Would delete' if dry_run else 'Deleting'} {len(batch_check_jobs)} batch_check jobs...")
 
             # Show sample of jobs to be deleted
             print("   Sample jobs:")
             for job in batch_check_jobs[:5]:
-                print(
-                    f"     - {job['job_id']} (status: {job.get('status', 'UNKNOWN')})"
-                )
+                print(f"     - {job['job_id']} (status: {job.get('status', 'UNKNOWN')})")
             if len(batch_check_jobs) > 5:
                 print(f"     ... and {len(batch_check_jobs) - 5} more")
 
@@ -158,9 +152,7 @@ def stop_batch_check_cycle(
                         table.delete_item(Key={"job_id": job["job_id"]})
                         stats["batch_checks_deleted"] += 1
                     except Exception as e:
-                        stats["errors"].append(
-                            f"Failed to delete {job['job_id']}: {str(e)}"
-                        )
+                        stats["errors"].append(f"Failed to delete {job['job_id']}: {str(e)}")
 
                 print(f"   Deleted {stats['batch_checks_deleted']} batch_check jobs")
 
@@ -175,9 +167,7 @@ def stop_batch_check_cycle(
                         table.delete_item(Key={"job_id": job["job_id"]})
                         stats["other_jobs_deleted"] += 1
                     except Exception as e:
-                        stats["errors"].append(
-                            f"Failed to delete {job['job_id']}: {str(e)}"
-                        )
+                        stats["errors"].append(f"Failed to delete {job['job_id']}: {str(e)}")
 
                 print(f"   Deleted {stats['other_jobs_deleted']} other jobs")
 
@@ -187,9 +177,7 @@ def stop_batch_check_cycle(
             print(f"\n4. Base job status: {current_status}")
 
             if current_status in ["PENDING", "PROCESSING", "FAILED"]:
-                print(
-                    f"   {'Would mark' if dry_run else 'Marking'} base job as COMPLETED to prevent new checks..."
-                )
+                print(f"   {'Would mark' if dry_run else 'Marking'} base job as COMPLETED to prevent new checks...")
 
                 if not dry_run:
                     try:
@@ -211,12 +199,8 @@ def stop_batch_check_cycle(
         # Step 5: Summary
         print("\n" + "=" * 80)
         print("SUMMARY:")
-        print(
-            f"  Batch check jobs deleted: {stats['batch_checks_deleted']}/{stats['batch_checks_found']}"
-        )
-        print(
-            f"  Other jobs deleted: {stats['other_jobs_deleted']}/{stats['other_jobs_found']}"
-        )
+        print(f"  Batch check jobs deleted: {stats['batch_checks_deleted']}/{stats['batch_checks_found']}")
+        print(f"  Other jobs deleted: {stats['other_jobs_deleted']}/{stats['other_jobs_found']}")
         print(f"  Base job updated: {'Yes' if stats['base_job_updated'] else 'No'}")
 
         if stats["errors"]:
@@ -224,15 +208,8 @@ def stop_batch_check_cycle(
             for error in stats["errors"][:5]:
                 print(f"    - {error}")
 
-        success = (
-            stats["batch_checks_deleted"] == stats["batch_checks_found"]
-            and not stats["errors"]
-        )
-        message = (
-            "Successfully stopped batch check cycle"
-            if success
-            else "Partially stopped cycle (see errors)"
-        )
+        success = stats["batch_checks_deleted"] == stats["batch_checks_found"] and not stats["errors"]
+        message = "Successfully stopped batch check cycle" if success else "Partially stopped cycle (see errors)"
 
         return success, message, stats
 

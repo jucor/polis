@@ -4,6 +4,9 @@ import os
 import subprocess
 import sys
 
+import boto3
+from boto3.dynamodb.conditions import Key
+
 # Define colors for output
 GREEN = "\033[0;32m"
 YELLOW = "\033[0;33m"
@@ -20,9 +23,7 @@ def show_usage() -> None:
     print("  --zid=CONVERSATION_ID     The Polis conversation ID to process")
     print()
     print("Optional arguments:")
-    print(
-        "  --rid=REPORT_ID           (Optional) The report ID for full narrative cleanup"
-    )
+    print("  --rid=REPORT_ID           (Optional) The report ID for full narrative cleanup")
     print("  --verbose                 Show detailed logs")
     print("  --force                   Force reprocessing even if data exists")
     print("  --validate                Run extra validation checks")
@@ -34,21 +35,15 @@ def main() -> None:
         description="Process a Polis conversation with the Delphi analytics pipeline.",
         add_help=False,
     )
-    parser.add_argument(
-        "--zid", required=True, help="The Polis conversation ID to process"
-    )
+    parser.add_argument("--zid", required=True, help="The Polis conversation ID to process")
     parser.add_argument(
         "--rid",
         required=False,
         help="The report ID, if available, for full narrative cleanup.",
     )
     parser.add_argument("--verbose", action="store_true", help="Show detailed logs")
-    parser.add_argument(
-        "--force", action="store_true", help="Force reprocessing even if data exists"
-    )
-    parser.add_argument(
-        "--validate", action="store_true", help="Run extra validation checks"
-    )
+    parser.add_argument("--force", action="store_true", help="Force reprocessing even if data exists")
+    parser.add_argument("--validate", action="store_true", help="Run extra validation checks")
     parser.add_argument("--help", action="store_true", help="Show this help message")
     parser.add_argument(
         "--include_moderation",
@@ -72,9 +67,7 @@ def main() -> None:
     # validate_arg = "--validate" if args.validate else ""
 
     # --- Reset all data before processing ---
-    print(
-        f"{YELLOW}Resetting all existing data for conversation {zid} before processing...{NC}"
-    )
+    print(f"{YELLOW}Resetting all existing data for conversation {zid} before processing...{NC}")
     reset_command = [
         "python",
         "umap_narrative/reset_conversation.py",
@@ -87,9 +80,7 @@ def main() -> None:
 
     reset_process = subprocess.run(reset_command, check=False)
     if reset_process.returncode != 0:
-        print(
-            f"{RED}Data reset failed with exit code {reset_process.returncode}. Aborting pipeline.{NC}"
-        )
+        print(f"{RED}Data reset failed with exit code {reset_process.returncode}. Aborting pipeline.{NC}")
         sys.exit(reset_process.returncode)
     print(f"{GREEN}Data reset complete.{NC}")
 
@@ -111,9 +102,7 @@ def main() -> None:
         print(f"{YELLOW}Limiting to {max_votes} votes for testing{NC}")
 
     batch_size = os.environ.get("BATCH_SIZE")
-    batch_size_arg = (
-        f"--batch-size={batch_size}" if batch_size else "--batch-size=50000"
-    )  # Default batch size
+    batch_size_arg = f"--batch-size={batch_size}" if batch_size else "--batch-size=50000"  # Default batch size
     if batch_size:
         print(f"{YELLOW}Using batch size of {batch_size}{NC}")
     else:
@@ -170,9 +159,7 @@ def main() -> None:
     extremity_exit_code = extremity_process.returncode
 
     if extremity_exit_code != 0:
-        print(
-            f"{RED}Warning: Extremity calculation failed with exit code {extremity_exit_code}{NC}"
-        )
+        print(f"{RED}Warning: Extremity calculation failed with exit code {extremity_exit_code}{NC}")
         print("Continuing with priority calculation...")
 
     # Calculate comment priorities using group-based extremity
@@ -189,9 +176,7 @@ def main() -> None:
     priority_exit_code = priority_process.returncode
 
     if priority_exit_code != 0:
-        print(
-            f"{RED}Warning: Priority calculation failed with exit code {priority_exit_code}{NC}"
-        )
+        print(f"{RED}Warning: Priority calculation failed with exit code {priority_exit_code}{NC}")
         print("Continuing with visualization...")
 
     if pipeline_exit_code == 0:
@@ -204,13 +189,8 @@ def main() -> None:
         # Generate visualizations for all available layers
         # First, determine available layers from DynamoDB
         try:
-            import boto3
-            from boto3.dynamodb.conditions import Key
-
             raw_endpoint = os.environ.get("DYNAMODB_ENDPOINT")
-            endpoint_url = (
-                raw_endpoint if raw_endpoint and raw_endpoint.strip() else None
-            )
+            endpoint_url = raw_endpoint if raw_endpoint and raw_endpoint.strip() else None
 
             # Using dummy credentials for local, IAM role for AWS
             if endpoint_url:
@@ -231,9 +211,7 @@ def main() -> None:
 
             print(f"{YELLOW}Querying all items to discover available layers...{NC}")
             while True:
-                query_kwargs = {
-                    "KeyConditionExpression": Key("conversation_id").eq(str(zid))
-                }
+                query_kwargs = {"KeyConditionExpression": Key("conversation_id").eq(str(zid))}
                 if last_key:
                     query_kwargs["ExclusiveStartKey"] = last_key
 
@@ -241,15 +219,9 @@ def main() -> None:
 
                 for item in response.get("Items", []):
                     for key, value in item.items():
-                        if (
-                            key.startswith("layer")
-                            and key.endswith("_cluster_id")
-                            and value is not None
-                        ):
+                        if key.startswith("layer") and key.endswith("_cluster_id") and value is not None:
                             try:
-                                layer_num = int(
-                                    key.replace("layer", "").replace("_cluster_id", "")
-                                )
+                                layer_num = int(key.replace("layer", "").replace("_cluster_id", ""))
                                 available_layers.add(layer_num)
                             except ValueError:
                                 continue
@@ -258,7 +230,7 @@ def main() -> None:
                 if not last_key:
                     break
 
-            available_layers = sorted(list(available_layers))
+            available_layers = sorted(available_layers)
             if not available_layers:
                 raise ValueError("No valid layers found for this conversation.")
 
@@ -291,12 +263,8 @@ def main() -> None:
         print(f"{GREEN}UMAP Narrative pipeline completed successfully!{NC}")
         print(f"Results stored in DynamoDB and visualizations for conversation {zid}")
     else:
-        print(
-            f"{RED}Warning: UMAP Narrative pipeline returned non-zero exit code: {pipeline_exit_code}{NC}"
-        )
-        print(
-            "The pipeline may have encountered errors but might still have produced partial results."
-        )
+        print(f"{RED}Warning: UMAP Narrative pipeline returned non-zero exit code: {pipeline_exit_code}{NC}")
+        print("The pipeline may have encountered errors but might still have produced partial results.")
         # Don't fail the overall script, just warn
         pipeline_exit_code = 0
 

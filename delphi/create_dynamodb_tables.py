@@ -21,20 +21,59 @@ import argparse
 import logging
 import os
 import time
+from typing import Any, NotRequired, TypedDict
 
 import boto3
-from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
+
+# Use flexible typing for boto3 resources
+DynamoDBResource = Any
+
+
+# DynamoDB Table Schema Types
+class KeySchemaElement(TypedDict):
+    AttributeName: str
+    KeyType: str  # "HASH" or "RANGE"
+
+
+class AttributeDefinition(TypedDict):
+    AttributeName: str
+    AttributeType: str  # "S", "N", "B"
+
+
+class ProvisionedThroughput(TypedDict):
+    ReadCapacityUnits: int
+    WriteCapacityUnits: int
+
+
+class Projection(TypedDict):
+    ProjectionType: str  # "ALL", "KEYS_ONLY", "INCLUDE"
+    NonKeyAttributes: NotRequired[list[str]]
+
+
+class GlobalSecondaryIndex(TypedDict):
+    IndexName: str
+    KeySchema: list[KeySchemaElement]
+    Projection: Projection
+    ProvisionedThroughput: NotRequired[ProvisionedThroughput]
+
+
+class DynamoDBTableSchema(TypedDict):
+    KeySchema: list[KeySchemaElement]
+    AttributeDefinitions: list[AttributeDefinition]
+    ProvisionedThroughput: NotRequired[ProvisionedThroughput]
+    BillingMode: NotRequired[str]  # "PAY_PER_REQUEST" or "PROVISIONED"
+    GlobalSecondaryIndexes: NotRequired[list[GlobalSecondaryIndex]]
+
+
+# Type alias for table collections
+DynamoDBTableCollection = dict[str, DynamoDBTableSchema]
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def create_polis_math_tables(
-    dynamodb: DynamoDBServiceResource, delete_existing: bool = False
-) -> list[str]:
+def create_polis_math_tables(dynamodb: DynamoDBResource, delete_existing: bool = False) -> list[str]:
     """
     Create all tables for the Polis math system.
 
@@ -46,7 +85,7 @@ def create_polis_math_tables(
     existing_tables = [t.name for t in dynamodb.tables.all()]
 
     # Define table schemas for Polis math
-    tables = {
+    tables: DynamoDBTableCollection = {
         # Main conversation metadata table
         "Delphi_PCAConversationConfig": {
             "KeySchema": [{"AttributeName": "zid", "KeyType": "HASH"}],
@@ -129,7 +168,7 @@ def create_polis_math_tables(
 
     # Handle table deletion if requested
     if delete_existing:
-        _delete_tables(dynamodb, tables.keys(), existing_tables)
+        _delete_tables(dynamodb, list(tables.keys()), existing_tables)
         # Update list of existing tables
         existing_tables = [t.name for t in dynamodb.tables.all()]
 
@@ -139,9 +178,7 @@ def create_polis_math_tables(
     return created_tables
 
 
-def create_job_queue_table(
-    dynamodb: DynamoDBServiceResource, delete_existing: bool = False
-) -> list[str]:
+def create_job_queue_table(dynamodb: DynamoDBResource, delete_existing: bool = False) -> list[str]:
     """
     Create the job queue table for the Delphi distributed processing system.
 
@@ -153,11 +190,9 @@ def create_job_queue_table(
     existing_tables = [t.name for t in dynamodb.tables.all()]
 
     # Define table schema for job queue - Redesigned with job_id as partition key
-    tables = {
+    tables: DynamoDBTableCollection = {
         "Delphi_JobQueue": {
-            "KeySchema": [
-                {"AttributeName": "job_id", "KeyType": "HASH"}  # Partition key
-            ],
+            "KeySchema": [{"AttributeName": "job_id", "KeyType": "HASH"}],  # Partition key
             "AttributeDefinitions": [
                 {"AttributeName": "job_id", "AttributeType": "S"},
                 {"AttributeName": "status", "AttributeType": "S"},
@@ -207,7 +242,7 @@ def create_job_queue_table(
 
     # Handle table deletion if requested
     if delete_existing:
-        _delete_tables(dynamodb, tables.keys(), existing_tables)
+        _delete_tables(dynamodb, list(tables.keys()), existing_tables)
         # Update list of existing tables
         existing_tables = [t.name for t in dynamodb.tables.all()]
 
@@ -217,9 +252,7 @@ def create_job_queue_table(
     return created_tables
 
 
-def create_evoc_tables(
-    dynamodb: DynamoDBServiceResource, delete_existing: bool = False
-) -> list[str]:
+def create_evoc_tables(dynamodb: DynamoDBResource, delete_existing: bool = False) -> list[str]:
     """
     Create all tables for the EVōC (Efficient Visualization of Clusters) pipeline.
 
@@ -231,7 +264,7 @@ def create_evoc_tables(
     existing_tables = [t.name for t in dynamodb.tables.all()]
 
     # Define table schemas for EVōC
-    tables = {
+    tables: DynamoDBTableCollection = {
         # Comment extremity table
         "Delphi_CommentExtremity": {
             "KeySchema": [
@@ -258,9 +291,7 @@ def create_evoc_tables(
                 },
                 {
                     "IndexName": "zid-index",
-                    "KeySchema": [
-                        {"AttributeName": "conversation_id", "KeyType": "HASH"}
-                    ],
+                    "KeySchema": [{"AttributeName": "conversation_id", "KeyType": "HASH"}],
                     "Projection": {"ProjectionType": "ALL"},
                 },
             ],
@@ -291,9 +322,7 @@ def create_evoc_tables(
         # Core tables
         "Delphi_UMAPConversationConfig": {
             "KeySchema": [{"AttributeName": "conversation_id", "KeyType": "HASH"}],
-            "AttributeDefinitions": [
-                {"AttributeName": "conversation_id", "AttributeType": "S"}
-            ],
+            "AttributeDefinitions": [{"AttributeName": "conversation_id", "AttributeType": "S"}],
             "BillingMode": "PAY_PER_REQUEST",
         },
         "Delphi_CommentEmbeddings": {
@@ -399,7 +428,7 @@ def create_evoc_tables(
 
     # Handle table deletion if requested
     if delete_existing:
-        _delete_tables(dynamodb, tables.keys(), existing_tables)
+        _delete_tables(dynamodb, list(tables.keys()), existing_tables)
         # Update list of existing tables
         existing_tables = [t.name for t in dynamodb.tables.all()]
 
@@ -410,7 +439,7 @@ def create_evoc_tables(
 
 
 def _delete_tables(
-    dynamodb: DynamoDBServiceResource,
+    dynamodb: DynamoDBResource,
     table_names: list[str],
     existing_tables: list[str],
 ) -> None:
@@ -422,16 +451,14 @@ def _delete_tables(
                 table.delete()
                 logger.info(f"Deleted table {table_name}")
                 # Wait for table to be deleted
-                table.meta.client.get_waiter("table_not_exists").wait(
-                    TableName=table_name
-                )
+                table.meta.client.get_waiter("table_not_exists").wait(TableName=table_name)
             except Exception as e:
                 logger.error(f"Error deleting table {table_name}: {str(e)}")
 
 
 def _create_tables(
-    dynamodb: DynamoDBServiceResource,
-    tables: dict[str, dict],
+    dynamodb: DynamoDBResource,
+    tables: DynamoDBTableCollection,
     existing_tables: list[str],
 ) -> list[str]:
     """Helper function to create tables."""
@@ -477,12 +504,12 @@ def _create_tables(
 
 
 def create_tables(
-    endpoint_url=None,
-    region_name="us-east-1",
-    delete_existing=False,
-    evoc_only=False,
-    polismath_only=False,
-    aws_profile=None,
+    endpoint_url: str | None = None,
+    region_name: str = "us-east-1",
+    delete_existing: bool = False,
+    evoc_only: bool = False,
+    polismath_only: bool = False,
+    aws_profile: str | None = None,
 ) -> list[str]:
     # Use the environment variable if endpoint_url is not provided
     if endpoint_url is None:
@@ -524,13 +551,13 @@ def create_tables(
         os.environ["AWS_SECRET_ACCESS_KEY"] = "fakeSecretAccessKey"
 
     # Create DynamoDB session and resource
-    session_args = {"region_name": region_name}
+    session_args: dict[str, Any] = {"region_name": region_name}
     if aws_profile:
         session_args["profile_name"] = aws_profile
 
     session = boto3.Session(**session_args)
 
-    dynamodb_args = {}
+    dynamodb_args: dict[str, Any] = {}
     if endpoint_url:
         dynamodb_args["endpoint_url"] = endpoint_url
 
@@ -573,9 +600,7 @@ def create_tables(
 
 def main() -> None:
     # Parse arguments
-    parser = argparse.ArgumentParser(
-        description="Create DynamoDB tables for Delphi system"
-    )
+    parser = argparse.ArgumentParser(description="Create DynamoDB tables for Delphi system")
     parser.add_argument(
         "--endpoint-url",
         type=str,
@@ -593,12 +618,8 @@ def main() -> None:
         action="store_true",
         help="Delete existing tables before creating new ones",
     )
-    parser.add_argument(
-        "--evoc-only", action="store_true", help="Create only EVōC tables"
-    )
-    parser.add_argument(
-        "--polismath-only", action="store_true", help="Create only Polis math tables"
-    )
+    parser.add_argument("--evoc-only", action="store_true", help="Create only EVōC tables")
+    parser.add_argument("--polismath-only", action="store_true", help="Create only Polis math tables")
     parser.add_argument("--aws-profile", type=str, help="AWS profile to use (optional)")
     args = parser.parse_args()
 

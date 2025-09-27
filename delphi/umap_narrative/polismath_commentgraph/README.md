@@ -45,15 +45,22 @@ The service follows a serverless architecture:
 
 ### Local Development
 
+**Note**: This Lambda service uses a **hybrid setup** for development vs deployment:
+
+- **Development**: Uses local `pyproject.toml` for IDE support and dependency resolution
+- **Deployment**: Uses `requirements.txt` for simple, reliable Lambda builds
+
 1. Setup a local environment:
 
    ```bash
    python -m venv .venv
    source .venv/bin/activate
-   pip install -e "../..[dev]"  # Install from project root
-
-   # Install EVOC from local directory
-   pip install -e ../evoc-main
+   
+   # Option A: Install from local pyproject.toml (recommended for IDE support)
+   pip install -e "."
+   
+   # Option B: Install from parent project root (alternative)
+   pip install -e "../..[dev]"
    ```
 
 2. Test PostgreSQL connection:

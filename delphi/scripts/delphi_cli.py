@@ -15,16 +15,16 @@ from datetime import datetime
 from typing import Any, cast
 
 import boto3
-from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
+
+# Use flexible typing for boto3 resources
+DynamoDBResource = Any
 
 try:
-    from rich import print as rprint
     from rich.console import Console
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich.prompt import Confirm, Prompt
     from rich.table import Table
-    from rich.text import Text
 
     RICH_AVAILABLE = True
 except ImportError:
@@ -55,9 +55,7 @@ def create_elegant_header() -> None:
     console.print()
 
 
-def setup_dynamodb(
-    endpoint_url: str | None = None, region: str = "us-east-1"
-) -> DynamoDBServiceResource:
+def setup_dynamodb(endpoint_url: str | None = None, region: str = "us-east-1") -> DynamoDBResource:
     if endpoint_url is None:
         endpoint_url = os.environ.get("DYNAMODB_ENDPOINT")
 
@@ -74,20 +72,16 @@ def setup_dynamodb(
 
 
 def submit_job(
-    dynamodb: DynamoDBServiceResource,
+    dynamodb: DynamoDBResource,
     zid: str,
     job_type: str = "FULL_PIPELINE",
     priority: int = 50,
     max_votes: str | None = None,
     batch_size: str | None = None,  # For FULL_PIPELINE/PCA
-    model: (
-        str | None
-    ) = None,  # For FULL_PIPELINE's REPORT stage & CREATE_NARRATIVE_BATCH
+    model: str | None = None,  # For FULL_PIPELINE's REPORT stage & CREATE_NARRATIVE_BATCH
     # Parameters for CREATE_NARRATIVE_BATCH stage config
     report_id_for_stage: str | None = None,
-    max_batch_size_stage: (
-        int | None
-    ) = None,  # Renamed to avoid conflict with general batch_size
+    max_batch_size_stage: int | None = None,  # Renamed to avoid conflict with general batch_size
     no_cache_stage: bool = False,
     # Parameters for AWAITING_NARRATIVE_BATCH jobs
     batch_id: str | None = None,
@@ -103,7 +97,7 @@ def submit_job(
     now = datetime.now().isoformat()
 
     # Build job configuration
-    job_config = {}
+    job_config: dict[str, Any] = {}
 
     if job_type == "FULL_PIPELINE":
         # Full pipeline configs
@@ -125,9 +119,7 @@ def submit_job(
             {
                 "stage": "REPORT",
                 "config": {
-                    "model": (
-                        model if model else os.environ.get("ANTHROPIC_MODEL")
-                    ),  # Use provided model or env var
+                    "model": (model if model else os.environ.get("ANTHROPIC_MODEL")),  # Use provided model or env var
                     "include_topics": True,
                 },
             }
@@ -139,18 +131,12 @@ def submit_job(
 
     elif job_type == "CREATE_NARRATIVE_BATCH":
         if not report_id_for_stage:
-            raise ValueError(
-                "report_id_for_stage is required for CREATE_NARRATIVE_BATCH job type."
-            )
+            raise ValueError("report_id_for_stage is required for CREATE_NARRATIVE_BATCH job type.")
 
         # Default values if not provided, matching typical expectations or server defaults if known
-        current_model = (
-            model if model else os.environ.get("ANTHROPIC_MODEL")
-        )  # Must be set via arg or env var
+        current_model = model if model else os.environ.get("ANTHROPIC_MODEL")  # Must be set via arg or env var
         if not current_model:
-            raise ValueError(
-                "Model must be specified via --model or ANTHROPIC_MODEL environment variable"
-            )
+            raise ValueError("Model must be specified via --model or ANTHROPIC_MODEL environment variable")
         current_max_batch_size = (
             int(max_batch_size_stage) if max_batch_size_stage is not None else 100
         )  # Default batch size for stage
@@ -171,13 +157,9 @@ def submit_job(
         }
     elif job_type == "AWAITING_NARRATIVE_BATCH":
         if not batch_id:
-            raise ValueError(
-                "batch_id is required for AWAITING_NARRATIVE_BATCH job type."
-            )
+            raise ValueError("batch_id is required for AWAITING_NARRATIVE_BATCH job type.")
         if not batch_job_id:
-            raise ValueError(
-                "batch_job_id is required for AWAITING_NARRATIVE_BATCH job type."
-            )
+            raise ValueError("batch_job_id is required for AWAITING_NARRATIVE_BATCH job type.")
 
         job_config = {
             "job_type": "AWAITING_NARRATIVE_BATCH",
@@ -197,9 +179,7 @@ def submit_job(
         "worker_id": "none",  # Non-empty placeholder for index
         "job_type": job_type,
         "priority": priority,
-        "conversation_id": str(
-            zid
-        ),  # Using conversation_id (but still accept zid as input)
+        "conversation_id": str(zid),  # Using conversation_id (but still accept zid as input)
         "retry_count": 0,
         "max_retries": 3,
         "timeout_seconds": 7200,  # 2 hours default timeout
@@ -231,9 +211,7 @@ def submit_job(
     return job_id
 
 
-def list_jobs(
-    dynamodb: DynamoDBServiceResource, status: str | None = None, limit: int = 10
-) -> list[dict[str, Any]]:
+def list_jobs(dynamodb: DynamoDBResource, status: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
     """List jobs in the Delphi job queue."""
     table = dynamodb.Table("Delphi_JobQueue")
 
@@ -304,9 +282,7 @@ def display_jobs(jobs: list[dict[str, Any]]) -> None:
     console.print(table)
 
 
-def get_job_details(
-    dynamodb: DynamoDBServiceResource, job_id: str
-) -> dict[str, Any] | None:
+def get_job_details(dynamodb: DynamoDBResource, job_id: str) -> dict[str, Any] | None:
     """Get detailed information about a specific job."""
     table = dynamodb.Table("Delphi_JobQueue")
 
@@ -435,9 +411,7 @@ def interactive_mode() -> None:
             batch_job_id_param = None
 
             if job_type == "FULL_PIPELINE":
-                if Confirm.ask(
-                    "Set parameters for FULL_PIPELINE (max_votes, batch_size, model)?"
-                ):
+                if Confirm.ask("Set parameters for FULL_PIPELINE (max_votes, batch_size, model)?"):
                     max_votes_input = Prompt.ask("Max votes (optional)", default="")
                     if max_votes_input:
                         max_votes = max_votes_input
@@ -454,9 +428,7 @@ def interactive_mode() -> None:
                         model_param = model_input
 
             elif job_type == "CREATE_NARRATIVE_BATCH":
-                report_id_stage_param = Prompt.ask(
-                    "[bold]Report ID (for stage config)[/bold]"
-                )
+                report_id_stage_param = Prompt.ask("[bold]Report ID (for stage config)[/bold]")
                 default_model = os.environ.get("ANTHROPIC_MODEL", "")
                 if default_model:
                     model_param = Prompt.ask(
@@ -473,9 +445,7 @@ def interactive_mode() -> None:
                 )
                 if max_batch_size_input:
                     max_batch_size_stage_param = int(max_batch_size_input)
-                no_cache_stage_param = Confirm.ask(
-                    "Enable no-cache for stage?", default=False
-                )
+                no_cache_stage_param = Confirm.ask("Enable no-cache for stage?", default=False)
 
             elif job_type == "AWAITING_NARRATIVE_BATCH":
                 batch_id_param = Prompt.ask("[bold]Batch ID[/bold]")
@@ -506,9 +476,7 @@ def interactive_mode() -> None:
                         batch_job_id=batch_job_id_param,
                     )
 
-                console.print(
-                    f"[bold green]Job submitted with ID: {job_id}[/bold green]"
-                )
+                console.print(f"[bold green]Job submitted with ID: {job_id}[/bold green]")
 
         elif choice == "2":
             # List jobs
@@ -555,9 +523,7 @@ def interactive_mode() -> None:
                 TextColumn("[progress.description]{task.description}"),
                 transient=True,
             ) as progress:
-                progress.add_task(
-                    description="Fetching conversation status...", total=None
-                )
+                progress.add_task(description="Fetching conversation status...", total=None)
                 status_data, error = get_conversation_status(dynamodb=dynamodb, zid=zid)
 
             if error:
@@ -571,18 +537,14 @@ def interactive_mode() -> None:
             break
 
 
-def get_conversation_status(
-    dynamodb: DynamoDBServiceResource, zid: str
-) -> tuple[dict[str, Any] | None, str]:
+def get_conversation_status(dynamodb: DynamoDBResource, zid: str) -> tuple[dict[str, Any] | None, str]:
     """Get detailed information about a conversation run."""
     conversation_meta_table = dynamodb.Table("Delphi_UMAPConversationConfig")
     topic_names_table = dynamodb.Table("Delphi_CommentClustersLLMTopicNames")
     job_table = dynamodb.Table("Delphi_JobQueue")
 
     try:
-        meta_response = conversation_meta_table.get_item(
-            Key={"conversation_id": str(zid)}
-        )
+        meta_response = conversation_meta_table.get_item(Key={"conversation_id": str(zid)})
         if "Item" not in meta_response:
             return (
                 None,
@@ -729,7 +691,7 @@ def display_conversation_status(status_data: dict[str, Any] | None) -> None:
         print("\nTopic Names (sample):")
         for layer_id, layer_topics in topics_by_layer.items():
             print(f"Layer {layer_id}:")
-            for i, topic in enumerate(layer_topics[:5]):
+            for topic in layer_topics[:5]:
                 # Handle both dictionary and direct value formats
                 if isinstance(topic.get("topic_name"), dict):
                     topic_name = topic.get("topic_name", {}).get("S", "Unknown")
@@ -855,7 +817,7 @@ def display_conversation_status(status_data: dict[str, Any] | None) -> None:
         topic_table.add_column("Cluster", style="cyan")
         topic_table.add_column("Topic Name", style="yellow")
 
-        for i, topic in enumerate(layer_topics[:5]):  # Show up to 5 topics per layer
+        for topic in layer_topics[:5]:  # Show up to 5 topics per layer
             # Handle both dictionary and direct value formats
             if isinstance(topic.get("topic_name"), dict):
                 topic_name = topic.get("topic_name", {}).get("S", "Unknown")
@@ -877,11 +839,7 @@ def display_conversation_status(status_data: dict[str, Any] | None) -> None:
     # Most recent job information
     if last_job:
         job_status = last_job.get("status", "")
-        status_color = (
-            "green"
-            if job_status == "COMPLETED"
-            else "yellow" if job_status == "PENDING" else "red"
-        )
+        status_color = "green" if job_status == "COMPLETED" else "yellow" if job_status == "PENDING" else "red"
 
         console.print(
             Panel(
@@ -911,19 +869,11 @@ def main() -> None:
         choices=["FULL_PIPELINE", "CREATE_NARRATIVE_BATCH", "AWAITING_NARRATIVE_BATCH"],
         help="Type of job to submit",
     )
-    submit_parser.add_argument(
-        "--priority", type=int, default=50, help="Job priority (0-100)"
-    )
-    submit_parser.add_argument(
-        "--max-votes", help="Maximum votes to process (for FULL_PIPELINE/PCA)"
-    )
-    submit_parser.add_argument(
-        "--batch-size", help="Batch size for processing (for FULL_PIPELINE/PCA)"
-    )
+    submit_parser.add_argument("--priority", type=int, default=50, help="Job priority (0-100)")
+    submit_parser.add_argument("--max-votes", help="Maximum votes to process (for FULL_PIPELINE/PCA)")
+    submit_parser.add_argument("--batch-size", help="Batch size for processing (for FULL_PIPELINE/PCA)")
     # General model argument, used by FULL_PIPELINE's REPORT stage and CREATE_NARRATIVE_BATCH
-    submit_parser.add_argument(
-        "--model", help="Model to use (defaults to ANTHROPIC_MODEL env var)"
-    )
+    submit_parser.add_argument("--model", help="Model to use (defaults to ANTHROPIC_MODEL env var)")
 
     # Arguments for CREATE_NARRATIVE_BATCH stage config
     submit_parser.add_argument(
@@ -942,9 +892,7 @@ def main() -> None:
     )
 
     # Arguments for AWAITING_NARRATIVE_BATCH jobs
-    submit_parser.add_argument(
-        "--batch-id", help="Batch ID for AWAITING_NARRATIVE_BATCH jobs"
-    )
+    submit_parser.add_argument("--batch-id", help="Batch ID for AWAITING_NARRATIVE_BATCH jobs")
     submit_parser.add_argument(
         "--batch-job-id",
         help="Original job ID that created the batch for AWAITING_NARRATIVE_BATCH jobs",
@@ -957,18 +905,14 @@ def main() -> None:
         choices=["PENDING", "PROCESSING", "COMPLETED", "FAILED"],
         help="Filter by status",
     )
-    list_parser.add_argument(
-        "--limit", type=int, default=25, help="Maximum number of jobs to list"
-    )
+    list_parser.add_argument("--limit", type=int, default=25, help="Maximum number of jobs to list")
 
     # Details command
     details_parser = subparsers.add_parser("details", help="View job details")
     details_parser.add_argument("job_id", help="Job ID to view details for")
 
     # Status command - NEW
-    status_parser = subparsers.add_parser(
-        "status", help="Check conversation status and results"
-    )
+    status_parser = subparsers.add_parser("status", help="Check conversation status and results")
     status_parser.add_argument("zid", help="Conversation ID (zid) to check status for")
 
     # Common options
@@ -976,9 +920,7 @@ def main() -> None:
     parser.add_argument("--region", default="us-east-1", help="AWS region")
 
     # Interactive mode is the default when no arguments are provided
-    parser.add_argument(
-        "--interactive", action="store_true", help="Run in interactive mode"
-    )
+    parser.add_argument("--interactive", action="store_true", help="Run in interactive mode")
 
     args = parser.parse_args()
 
@@ -998,21 +940,15 @@ def main() -> None:
         # Validate arguments for CREATE_NARRATIVE_BATCH
         if args.job_type == "CREATE_NARRATIVE_BATCH":
             if not args.report_id_stage:
-                parser.error(
-                    "--report-id-stage is required when --job-type is CREATE_NARRATIVE_BATCH"
-                )
+                parser.error("--report-id-stage is required when --job-type is CREATE_NARRATIVE_BATCH")
             # model, max_batch_size_stage, no_cache_stage have defaults or are optional in submit_job if not provided here
 
         # Validate arguments for AWAITING_NARRATIVE_BATCH
         if args.job_type == "AWAITING_NARRATIVE_BATCH":
             if not args.batch_id:
-                parser.error(
-                    "--batch-id is required when --job-type is AWAITING_NARRATIVE_BATCH"
-                )
+                parser.error("--batch-id is required when --job-type is AWAITING_NARRATIVE_BATCH")
             if not args.batch_job_id:
-                parser.error(
-                    "--batch-job-id is required when --job-type is AWAITING_NARRATIVE_BATCH"
-                )
+                parser.error("--batch-job-id is required when --job-type is AWAITING_NARRATIVE_BATCH")
 
         job_id = submit_job(
             dynamodb=dynamodb,

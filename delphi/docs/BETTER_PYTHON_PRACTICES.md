@@ -95,7 +95,7 @@ ignore = ["E501", "PLR0913", "PLR0912", "PLR0915"]
 
 - **Consistent code style** across the project
 - **Automatic formatting** eliminates style debates
-- **88 character line length** (modern standard)
+- **120 character line length**
 
 #### MyPy - Type Checking
 
@@ -701,7 +701,7 @@ pip show delphi-polis
 ```toml
 [tool.ruff]
 target-version = "py312"
-line-length = 88
+line-length = 120
 select = ["E", "W", "F", "I", "B", "C4", "UP", "PL"]
 ignore = ["E501", "B008", "C901", "PLR0913", "PLR0912", "PLR0915"]
 ```
@@ -710,7 +710,7 @@ ignore = ["E501", "B008", "C901", "PLR0913", "PLR0912", "PLR0915"]
 
 ```toml
 [tool.black]
-line-length = 88
+line-length = 120
 target-version = ["py39", "py310", "py311", "py312"]
 ```
 

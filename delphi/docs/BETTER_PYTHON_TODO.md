@@ -1,8 +1,9 @@
 # Better Python Practices TODO list
 
-[ ] Upgrade dependencies
+[ ] Upgrade dependencies  
 [ ] Audit & Improve Dockerfiles
-[ ] Set up Bandit
+[x] Set up Bandit
+[x] Streamline code quality tools (removed flake8/isort conflicts with ruff)
 [ ] Fix all type-check errors
 [ ] Fix all lint errors
 [x] Fix or remove `make build`
@@ -14,3 +15,11 @@
 [x] Refactor make docker commands to use docker directly without docker compose
 [ ] Confirm or remove `configure_instance.py`
 [ ] Confirm or remove `setup_minio_bucket.py` (likely remove)
+
+## Tool Conflicts Resolved ✅
+
+- Removed flake8 (replaced by ruff)
+- Removed isort (replaced by ruff)  
+- Fixed E704 conflicts between Black and linters
+- Streamlined pre-commit hooks
+- Updated Makefile for modern toolchain

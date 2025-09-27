@@ -6,33 +6,37 @@ This script fetches conversation data from PostgreSQL, processes it using
 EVōC for clustering, and generates interactive visualizations with topic labeling.
 """
 
+import argparse
 import hashlib
 import json
 import logging
 import os
 import random
+import re
 import time
+import traceback
 import uuid  # For generating job_id
 from datetime import datetime
 
 # Import from installed packages
 import evoc
 import numpy as np
+import ollama
 from polismath_commentgraph.utils.converter import DataConverter
 
 # Import from local modules
 from polismath_commentgraph.utils.storage import DynamoDBStorage, PostgresClient
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import AgglomerativeClustering, KMeans
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
+from umap import UMAP
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def setup_environment(
-    db_host=None, db_port=None, db_name=None, db_user=None, db_password=None
-):
+def setup_environment(db_host=None, db_port=None, db_name=None, db_user=None, db_password=None):
     """Set up environment variables for database connections."""
     # PostgreSQL settings
     if db_host:
@@ -101,9 +105,7 @@ def fetch_conversation_data(zid):
         # Count active and inactive for logging purposes only
         active_count = sum(1 for c in comments if c.get("active", True))
         inactive_count = sum(1 for c in comments if not c.get("active", True))
-        logger.info(
-            f"Comment counts - Active: {active_count}, Inactive: {inactive_count}, Total: {len(comments)}"
-        )
+        logger.info(f"Comment counts - Active: {active_count}, Inactive: {inactive_count}, Total: {len(comments)}")
 
         # Create metadata
         metadata = {
@@ -123,8 +125,6 @@ def fetch_conversation_data(zid):
 
     except Exception as e:
         logger.error(f"Error fetching conversation: {str(e)}")
-        import traceback
-
         logger.error(traceback.format_exc())
         return None, None
 
@@ -148,9 +148,7 @@ def process_comments(comments, conversation_id):
         comment_texts: List of comment text strings
         comment_ids: List of comment IDs
     """
-    logger.info(
-        f"Processing {len(comments)} comments for conversation {conversation_id}..."
-    )
+    logger.info(f"Processing {len(comments)} comments for conversation {conversation_id}...")
 
     # Extract comment texts and IDs
     comment_texts = [c["txt"] for c in comments if c["txt"] and c["txt"].strip()]
@@ -165,9 +163,7 @@ def process_comments(comments, conversation_id):
 
     # Generate 2D projection with UMAP
     logger.info("Generating 2D projection with UMAP...")
-    document_map = UMAP(n_components=2, metric="cosine", random_state=42).fit_transform(
-        document_vectors
-    )
+    document_map = UMAP(n_components=2, metric="cosine", random_state=42).fit_transform(document_vectors)
 
     # Cluster with EVōC
     logger.info("Clustering with EVōC...")
@@ -176,9 +172,7 @@ def process_comments(comments, conversation_id):
         cluster_labels = clusterer.fit_predict(document_vectors)
         cluster_layers = clusterer.cluster_layers_
 
-        logger.info(
-            f"Found {len(np.unique(cluster_labels))} clusters at the finest level"
-        )
+        logger.info(f"Found {len(np.unique(cluster_labels))} clusters at the finest level")
         for i, layer in enumerate(cluster_layers):
             unique_clusters = np.unique(layer[layer >= 0])
             logger.info(f"Layer {i}: {len(unique_clusters)} clusters")
@@ -186,22 +180,16 @@ def process_comments(comments, conversation_id):
     except Exception as e:
         logger.error(f"Error during EVōC clustering: {e}")
         # Fallback to simple clustering
-        from sklearn.cluster import KMeans
-
         logger.info("Falling back to KMeans clustering...")
         kmeans = KMeans(n_clusters=5, random_state=42)
         cluster_labels = kmeans.fit_predict(document_vectors)
 
         # Create a simple layered clustering for demonstration
-        from sklearn.cluster import AgglomerativeClustering
-
         layer1 = AgglomerativeClustering(n_clusters=3).fit_predict(document_vectors)
         layer2 = AgglomerativeClustering(n_clusters=2).fit_predict(document_vectors)
 
         cluster_layers = [cluster_labels, layer1, layer2]
-        logger.info(
-            f"Created {len(cluster_layers)} cluster layers with fallback clustering"
-        )
+        logger.info(f"Created {len(cluster_layers)} cluster layers with fallback clustering")
 
     return document_map, document_vectors, cluster_layers, comment_texts, comment_ids
 
@@ -292,21 +280,15 @@ def generate_cluster_topic_labels(
     # Check for Anthropic API key
     anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not anthropic_api_key:
-        warning_message = (
-            "⚠️ ANTHROPIC_API_KEY not set. LLM-based narrative reports will be skipped."
-        )
+        warning_message = "⚠️ ANTHROPIC_API_KEY not set. LLM-based narrative reports will be skipped."
         logger.warning(warning_message)
         # Print to stdout directly for better visibility in Docker logs
         print(f"\033[0;33m{warning_message}\033[0m")
-        print(
-            "To generate narrative reports, set the ANTHROPIC_API_KEY environment variable."
-        )
+        print("To generate narrative reports, set the ANTHROPIC_API_KEY environment variable.")
 
     # Check if we should use Ollama
     if use_ollama and comment_texts is not None and layer is not None:
         try:
-            import ollama
-
             logger.info("Using Ollama for cluster naming")
 
             # Function to get topic labels via Ollama
@@ -318,18 +300,14 @@ def generate_cluster_topic_labels(
                     "Reply with exactly one topic label, in quotation marks, on a single line.\n\n"
                     "Comments:\n"
                 )
-                for j, comment in enumerate(
-                    comments[:5]
-                ):  # Use 5 pseudo-random comments as examples
+                for j, comment in enumerate(comments[:5]):  # Use 5 pseudo-random comments as examples
                     prompt += f"{j + 1}. {comment}\n"
 
                 try:
                     # Get model name from environment variable or use default
                     model_name = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
                     logger.info(f"Using Ollama model from environment: {model_name}")
-                    response = ollama.chat(
-                        model=model_name, messages=[{"role": "user", "content": prompt}]
-                    )
+                    response = ollama.chat(model=model_name, messages=[{"role": "user", "content": prompt}])
 
                     # Extract just the topic name with more thorough cleaning
                     raw_response = response["message"]["content"].strip()
@@ -356,8 +334,6 @@ def generate_cluster_topic_labels(
                     ]
 
                     # First, check if there's already a layer_cluster prefix (like "1_2:") and remove it
-                    import re
-
                     layer_prefix_match = re.match(r"^\d+_\d+:\s*", raw_response)
                     if layer_prefix_match:
                         raw_response = raw_response[layer_prefix_match.end() :]
@@ -405,12 +381,8 @@ def generate_cluster_topic_labels(
                 cluster_indices_list = [int(i) for i in cluster_indices.tolist()]
                 # Deterministic pseudo-random sample of up to 5 indices per (conversation, layer, cluster)
                 if len(cluster_indices_list) > 5:
-                    seed_material = (
-                        f"{conversation_name}|{layer_idx}|{cluster_id}".encode()
-                    )
-                    seed_int = int(hashlib.sha1(seed_material).hexdigest(), 16) % (
-                        2**32
-                    )
+                    seed_material = f"{conversation_name}|{layer_idx}|{cluster_id}".encode()
+                    seed_int = int(hashlib.sha1(seed_material).hexdigest(), 16) % (2**32)
                     rng = random.Random(seed_int)
                     selected_indices = rng.sample(cluster_indices_list, 5)
                 else:
@@ -494,9 +466,7 @@ def create_comment_hover_info(cluster_layer, cluster_characteristics, comment_te
         hover_info: List of hover text strings for each comment
     """
     hover_info = []
-    for i, (text, cluster_id) in enumerate(
-        zip(comment_texts, cluster_layer, strict=False)
-    ):
+    for text, cluster_id in zip(comment_texts, cluster_layer, strict=False):
         if cluster_id >= 0 and cluster_id in cluster_characteristics:
             characteristics = cluster_characteristics[cluster_id]
 
@@ -545,10 +515,7 @@ def create_basic_layer_visualization(
     """
     # Create labels vector
     labels_for_viz = np.array(
-        [
-            cluster_labels.get(label, "Unlabelled") if label >= 0 else "Unlabelled"
-            for label in cluster_layer
-        ]
+        [cluster_labels.get(label, "Unlabelled") if label >= 0 else "Unlabelled" for label in cluster_layer]
     )
 
     # Create interactive visualization
@@ -605,10 +572,7 @@ def create_named_layer_visualization(
     """
     # Create labels vector
     labels_for_viz = np.array(
-        [
-            cluster_labels.get(label, "Unlabelled") if label >= 0 else "Unlabelled"
-            for label in cluster_layer
-        ]
+        [cluster_labels.get(label, "Unlabelled") if label >= 0 else "Unlabelled" for label in cluster_layer]
     )
 
     # Create interactive visualization
@@ -667,14 +631,10 @@ def process_layers_and_store_characteristics(
         )
 
         # Generate cluster characteristics
-        cluster_characteristics = characterize_comment_clusters(
-            cluster_layer, comment_texts
-        )
+        cluster_characteristics = characterize_comment_clusters(cluster_layer, comment_texts)
 
         # Create basic numeric topic names
-        numeric_labels = {
-            str(i): f"Topic {i}" for i in np.unique(cluster_layer[cluster_layer >= 0])
-        }
+        numeric_labels = {str(i): f"Topic {i}" for i in np.unique(cluster_layer[cluster_layer >= 0])}
 
         # Store layer data
         layer_data[layer_idx] = {
@@ -700,9 +660,7 @@ def process_layers_and_store_characteristics(
 
             # Save numeric topic names
             with open(
-                os.path.join(
-                    output_dir, f"{conversation_id}_layer_{layer_idx}_topic_names.json"
-                ),
+                os.path.join(output_dir, f"{conversation_id}_layer_{layer_idx}_topic_names.json"),
                 "w",
             ) as f:
                 json.dump(numeric_labels, f, indent=2)
@@ -710,19 +668,13 @@ def process_layers_and_store_characteristics(
         # Store in DynamoDB if provided
         if dynamo_storage:
             # Convert and store cluster characteristics
-            logger.info(
-                f"Storing cluster characteristics for layer {layer_idx} in DynamoDB..."
-            )
+            logger.info(f"Storing cluster characteristics for layer {layer_idx} in DynamoDB...")
             characteristic_models = DataConverter.batch_convert_cluster_characteristics(
                 conversation_id, cluster_characteristics, layer_idx
             )  # job_id is not directly part of characteristics PK, but good to have if we extend
 
-            result = dynamo_storage.batch_create_cluster_characteristics(
-                characteristic_models
-            )
-            logger.info(
-                f"Stored {result['success']} cluster characteristics with {result['failure']} failures"
-            )
+            result = dynamo_storage.batch_create_cluster_characteristics(characteristic_models)
+            logger.info(f"Stored {result['success']} cluster characteristics with {result['failure']} failures")
 
     logger.info("Processing of layers and storing characteristics complete!")
     return layer_data
@@ -750,9 +702,7 @@ def create_static_datamapplot(
     Returns:
         Boolean indicating success
     """
-    logger.info(
-        f"Generating static datamapplot for conversation {conversation_id}, layer {layer_num}"
-    )
+    logger.info(f"Generating static datamapplot for conversation {conversation_id}, layer {layer_num}")
 
     try:
         # Create visualization directory if it doesn't exist
@@ -774,11 +724,7 @@ def create_static_datamapplot(
         # Create labels vector
         label_strings = np.array(
             [
-                (
-                    clean_topic_name(cluster_labels.get(label, f"Topic {label}"))
-                    if label >= 0
-                    else "Unclustered"
-                )
+                (clean_topic_name(cluster_labels.get(label, f"Topic {label}")) if label >= 0 else "Unclustered")
                 for label in cluster_layer
             ]
         )
@@ -805,23 +751,17 @@ def create_static_datamapplot(
 
         # 1. Save to visualizations directory
         # Regular PNG
-        static_png = os.path.join(
-            vis_dir, f"{conversation_id}_layer_{layer_num}_datamapplot_static.png"
-        )
+        static_png = os.path.join(vis_dir, f"{conversation_id}_layer_{layer_num}_datamapplot_static.png")
         fig.savefig(static_png, dpi=300, bbox_inches="tight")
         logger.info(f"Saved static PNG to {static_png}")
 
         # High resolution PNG for presentations
-        presentation_png = os.path.join(
-            vis_dir, f"{conversation_id}_layer_{layer_num}_datamapplot_presentation.png"
-        )
+        presentation_png = os.path.join(vis_dir, f"{conversation_id}_layer_{layer_num}_datamapplot_presentation.png")
         fig.savefig(presentation_png, dpi=600, bbox_inches="tight")
         logger.info(f"Saved high-resolution PNG to {presentation_png}")
 
         # SVG for vector graphics
-        svg_file = os.path.join(
-            vis_dir, f"{conversation_id}_layer_{layer_num}_datamapplot_static.svg"
-        )
+        svg_file = os.path.join(vis_dir, f"{conversation_id}_layer_{layer_num}_datamapplot_static.svg")
         fig.savefig(svg_file, format="svg", bbox_inches="tight")
         logger.info(f"Saved vector SVG to {svg_file}")
 
@@ -841,9 +781,7 @@ def create_static_datamapplot(
                 f"{conversation_id}_layer_{layer_num}_datamapplot_presentation.png",
             )
             fig.savefig(output_presentation_png, dpi=600, bbox_inches="tight")
-            logger.info(
-                f"Saved high-resolution PNG to pipeline output: {output_presentation_png}"
-            )
+            logger.info(f"Saved high-resolution PNG to pipeline output: {output_presentation_png}")
 
             # SVG for vector graphics
             output_svg_file = os.path.join(
@@ -891,14 +829,10 @@ def create_visualizations(
         layer_data = {}
         for layer_idx, cluster_layer in enumerate(cluster_layers):
             # Generate cluster characteristics
-            characteristics = characterize_comment_clusters(
-                cluster_layer, comment_texts
-            )
+            characteristics = characterize_comment_clusters(cluster_layer, comment_texts)
 
             # Create basic numeric topic names
-            numeric_labels = {
-                i: f"Topic {i}" for i in np.unique(cluster_layer[cluster_layer >= 0])
-            }
+            numeric_labels = {i: f"Topic {i}" for i in np.unique(cluster_layer[cluster_layer >= 0])}
 
             layer_data[layer_idx] = {
                 "characteristics": characteristics,
@@ -911,9 +845,7 @@ def create_visualizations(
 
     for layer_idx, cluster_layer in enumerate(cluster_layers):
         if layer_idx not in layer_data:
-            logger.warning(
-                f"No layer data for layer {layer_idx}, skipping visualization..."
-            )
+            logger.warning(f"No layer data for layer {layer_idx}, skipping visualization...")
             continue
 
         # Get characteristics and numeric topic names
@@ -921,9 +853,7 @@ def create_visualizations(
         numeric_topic_names = layer_data[layer_idx]["numeric_topic_names"]
 
         # Create hover information
-        hover_info = create_comment_hover_info(
-            cluster_layer, characteristics, comment_texts
-        )
+        hover_info = create_comment_hover_info(cluster_layer, characteristics, comment_texts)
 
         # Create basic visualization
         create_basic_layer_visualization(
@@ -998,14 +928,10 @@ def create_visualizations(
         # Add to list of layer files and info
         if named_file:
             layer_files.append(named_file)
-            layer_info.append(
-                (layer_idx, len(np.unique(cluster_layer[cluster_layer >= 0])))
-            )
+            layer_info.append((layer_idx, len(np.unique(cluster_layer[cluster_layer >= 0]))))
 
     # Create index file
-    index_file = create_enhanced_multilayer_index(
-        output_dir, conversation_id, layer_files, layer_info
-    )
+    index_file = create_enhanced_multilayer_index(output_dir, conversation_id, layer_files, layer_info)
 
     logger.info("Visualization creation complete!")
     logger.info(f"Index file available at: {index_file}")
@@ -1078,9 +1004,7 @@ def process_layers_and_create_visualizations(
             characteristics = layer_data[layer_idx]["characteristics"]
 
             # Generate topic labels with Ollama
-            logger.info(
-                f"Generating LLM topic names for layer {layer_idx} with Ollama..."
-            )
+            logger.info(f"Generating LLM topic names for layer {layer_idx} with Ollama...")
             cluster_labels = generate_cluster_topic_labels(
                 characteristics,
                 comment_texts=comment_texts,
@@ -1102,9 +1026,7 @@ def process_layers_and_create_visualizations(
 
             # Store in DynamoDB if provided
             if dynamo_storage:
-                logger.info(
-                    f"Storing LLM topic names for layer {layer_idx} in DynamoDB..."
-                )
+                logger.info(f"Storing LLM topic names for layer {layer_idx} in DynamoDB...")
                 # Get model name from environment variable or use default
                 model_name = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
                 llm_topic_models = DataConverter.batch_convert_llm_topic_names(
@@ -1115,9 +1037,7 @@ def process_layers_and_create_visualizations(
                     job_id=job_id,  # Pass job_id
                 )
                 result = dynamo_storage.batch_create_llm_topic_names(llm_topic_models)
-                logger.info(
-                    f"Stored {result['success']} LLM topic names with {result['failure']} failures"
-                )
+                logger.info(f"Stored {result['success']} LLM topic names with {result['failure']} failures")
 
             # Create a new static datamapplot with the LLM labels
             # logger.info(f"Generating static datamapplot with LLM labels for layer {layer_idx}...")
@@ -1129,16 +1049,12 @@ def process_layers_and_create_visualizations(
             #     output_dir,
             #     layer_idx
             # )
-            logger.info(
-                f"Skipped static datamapplot with LLM labels for layer {layer_idx}..."
-            )
+            logger.info(f"Skipped static datamapplot with LLM labels for layer {layer_idx}...")
 
     return index_file
 
 
-def create_enhanced_multilayer_index(
-    output_path, conversation_name, layer_files, layer_info
-):
+def create_enhanced_multilayer_index(output_path, conversation_name, layer_files, layer_info):
     """
     Create an index HTML file linking to all enhanced layer visualizations.
 
@@ -1151,9 +1067,7 @@ def create_enhanced_multilayer_index(
     Returns:
         file_path: Path to the saved index file
     """
-    index_file = os.path.join(
-        output_path, f"{conversation_name}_comment_enhanced_index.html"
-    )
+    index_file = os.path.join(output_path, f"{conversation_name}_comment_enhanced_index.html")
 
     with open(index_file, "w") as f:
         f.write(
@@ -1234,18 +1148,14 @@ def create_enhanced_multilayer_index(
         )
 
         # Add links to each layer
-        for (layer_idx, num_clusters), file_path in zip(
-            layer_info, layer_files, strict=False
-        ):
+        for (layer_idx, num_clusters), file_path in zip(layer_info, layer_files, strict=False):
             file_name = os.path.basename(file_path)
             basic_view_file = file_name.replace("_named.html", "_enhanced.html")
             named_view_file = file_name
 
             # Static file references
             static_png = f"{conversation_name}_layer_{layer_idx}_datamapplot_static.png"
-            presentation_png = (
-                f"{conversation_name}_layer_{layer_idx}_datamapplot_presentation.png"
-            )
+            presentation_png = f"{conversation_name}_layer_{layer_idx}_datamapplot_presentation.png"
             static_svg = f"{conversation_name}_layer_{layer_idx}_datamapplot_static.svg"
 
             # Consensus/divisive visualization references
@@ -1255,11 +1165,7 @@ def create_enhanced_multilayer_index(
             description = (
                 "Fine-grained grouping"
                 if layer_idx == 0
-                else (
-                    "Coarser grouping"
-                    if layer_idx == len(layer_info) - 1
-                    else "Medium granularity"
-                )
+                else ("Coarser grouping" if layer_idx == len(layer_info) - 1 else "Medium granularity")
             )
 
             f.write(
@@ -1302,9 +1208,7 @@ def create_enhanced_multilayer_index(
     return index_file
 
 
-def process_conversation(
-    zid, export_dynamo=True, use_ollama=False, include_moderation=False
-) -> bool:
+def process_conversation(zid, export_dynamo=True, use_ollama=False, include_moderation=False) -> bool:
     """
     Main function to process a conversation and generate visualizations.
 
@@ -1314,9 +1218,7 @@ def process_conversation(
         use_ollama: Whether to use Ollama for topic naming
     """
     # Create conversation directory
-    output_dir = os.path.join(
-        "polis_data", str(zid), "python_output", "comments_enhanced_multilayer"
-    )
+    output_dir = os.path.join("polis_data", str(zid), "python_output", "comments_enhanced_multilayer")
     os.makedirs(output_dir, exist_ok=True)
 
     # Fetch data from PostgreSQL
@@ -1339,8 +1241,8 @@ def process_conversation(
     conversation_name = metadata.get("conversation_name", f"Conversation {zid}")
 
     # Process comments
-    document_map, document_vectors, cluster_layers, comment_texts, comment_ids = (
-        process_comments(comments, conversation_id)
+    document_map, document_vectors, cluster_layers, comment_texts, comment_ids = process_comments(
+        comments, conversation_id
     )
 
     # Initialize DynamoDB storage if requested
@@ -1351,14 +1253,10 @@ def process_conversation(
         endpoint_url = raw_endpoint if raw_endpoint and raw_endpoint.strip() else None
         logger.info(f"Using DynamoDB endpoint from environment: {endpoint_url}")
 
-        dynamo_storage = DynamoDBStorage(
-            region_name="us-east-1", endpoint_url=endpoint_url
-        )
+        dynamo_storage = DynamoDBStorage(region_name="us-east-1", endpoint_url=endpoint_url)
 
         # Store basic data in DynamoDB
-        logger.info(
-            f"Storing basic data in DynamoDB for conversation {conversation_id}..."
-        )
+        logger.info(f"Storing basic data in DynamoDB for conversation {conversation_id}...")
 
         # Store conversation metadata
         logger.info("Storing conversation metadata...")
@@ -1369,33 +1267,21 @@ def process_conversation(
 
         # Store embeddings
         logger.info("Storing comment embeddings...")
-        embedding_models = DataConverter.batch_convert_embeddings(
-            conversation_id, document_vectors
-        )
+        embedding_models = DataConverter.batch_convert_embeddings(conversation_id, document_vectors)
         result = dynamo_storage.batch_create_comment_embeddings(embedding_models)
-        logger.info(
-            f"Stored {result['success']} embeddings with {result['failure']} failures"
-        )
+        logger.info(f"Stored {result['success']} embeddings with {result['failure']} failures")
 
         # Store UMAP graph edges
         logger.info("Storing UMAP graph edges...")
-        edge_models = DataConverter.batch_convert_umap_edges(
-            conversation_id, document_map, cluster_layers
-        )
+        edge_models = DataConverter.batch_convert_umap_edges(conversation_id, document_map, cluster_layers)
         result = dynamo_storage.batch_create_graph_edges(edge_models)
-        logger.info(
-            f"Stored {result['success']} UMAP graph edges with {result['failure']} failures"
-        )
+        logger.info(f"Stored {result['success']} UMAP graph edges with {result['failure']} failures")
 
         # Store cluster assignments
         logger.info("Storing comment cluster assignments...")
-        cluster_models = DataConverter.batch_convert_clusters(
-            conversation_id, cluster_layers, document_map
-        )
+        cluster_models = DataConverter.batch_convert_clusters(conversation_id, cluster_layers, document_map)
         result = dynamo_storage.batch_create_comment_clusters(cluster_models)
-        logger.info(
-            f"Stored {result['success']} cluster assignments with {result['failure']} failures"
-        )
+        logger.info(f"Stored {result['success']} cluster assignments with {result['failure']} failures")
 
         # Store cluster topics (basic info only)
         logger.info("Storing cluster topics...")
@@ -1408,9 +1294,7 @@ def process_conversation(
             comments=[{"body": comment["txt"]} for comment in comments],
         )
         result = dynamo_storage.batch_create_cluster_topics(topic_models)
-        logger.info(
-            f"Stored {result['success']} topics with {result['failure']} failures"
-        )
+        logger.info(f"Stored {result['success']} topics with {result['failure']} failures")
 
     # Process layers, store characteristics, and create visualizations
     process_layers_and_create_visualizations(
@@ -1437,11 +1321,7 @@ def process_conversation(
 def main() -> None:
     """Main entry point."""
     # Parse arguments
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Process Polis conversation from PostgreSQL"
-    )
+    parser = argparse.ArgumentParser(description="Process Polis conversation from PostgreSQL")
     parser.add_argument(
         "--zid",
         type=int,
@@ -1449,26 +1329,18 @@ def main() -> None:
         default=22154,
         help="Conversation ID to process",
     )
-    parser.add_argument(
-        "--no-dynamo", action="store_true", help="Skip exporting to DynamoDB"
-    )
+    parser.add_argument("--no-dynamo", action="store_true", help="Skip exporting to DynamoDB")
     parser.add_argument("--db-host", type=str, default=None, help="PostgreSQL host")
     parser.add_argument("--db-port", type=int, default=None, help="PostgreSQL port")
-    parser.add_argument(
-        "--db-name", type=str, default=None, help="PostgreSQL database name"
-    )
+    parser.add_argument("--db-name", type=str, default=None, help="PostgreSQL database name")
     parser.add_argument("--db-user", type=str, default=None, help="PostgreSQL user")
-    parser.add_argument(
-        "--db-password", type=str, default=None, help="PostgreSQL password"
-    )
+    parser.add_argument("--db-password", type=str, default=None, help="PostgreSQL password")
     parser.add_argument(
         "--use-mock-data",
         action="store_true",
         help="Use mock data instead of connecting to PostgreSQL",
     )
-    parser.add_argument(
-        "--use-ollama", action="store_true", help="Use Ollama for topic naming"
-    )
+    parser.add_argument("--use-ollama", action="store_true", help="Use Ollama for topic naming")
     parser.add_argument(
         "--include_moderation",
         type=bool,
@@ -1521,8 +1393,8 @@ def main() -> None:
         }
 
         # Process with mock data
-        document_map, document_vectors, cluster_layers, comment_texts, comment_ids = (
-            process_comments(mock_comments, str(args.zid))
+        document_map, document_vectors, cluster_layers, comment_texts, comment_ids = process_comments(
+            mock_comments, str(args.zid)
         )
 
         # Store in DynamoDB if requested
@@ -1537,9 +1409,7 @@ def main() -> None:
             )
 
         # Process each layer and create visualizations
-        output_dir = os.path.join(
-            "polis_data", str(args.zid), "python_output", "comments_enhanced_multilayer"
-        )
+        output_dir = os.path.join("polis_data", str(args.zid), "python_output", "comments_enhanced_multilayer")
         os.makedirs(output_dir, exist_ok=True)
 
         process_layers_and_create_visualizations(

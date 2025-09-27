@@ -44,4 +44,4 @@ numba>=0.56.4
 llvmlite>=0.39.0
 
 # Required dependency for clustering
-evoc>=0.1.0  # Install from the evoc-main directory in the parent folder
+evoc>=0.1.3

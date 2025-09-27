@@ -13,15 +13,17 @@ import json
 import logging
 import os
 import sys
+import traceback
+from typing import Any
 
 import boto3
 from botocore.config import Config
-from mypy_boto3_s3.client import S3Client
+
+# Use flexible typing for boto3 clients
+S3Client = Any
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -57,11 +59,7 @@ def setup_minio_bucket(bucket_name: str | None = None) -> bool:
             logger.info(f"Bucket '{bucket_name}' doesn't exist, creating...")
 
             # Create bucket - no region needed for minio/us-east-1
-            if (
-                region == "us-east-1"
-                or "localhost" in endpoint_url
-                or "minio" in endpoint_url
-            ):
+            if region == "us-east-1" or "localhost" in endpoint_url or "minio" in endpoint_url:
                 s3_client.create_bucket(Bucket=bucket_name)
             else:
                 s3_client.create_bucket(
@@ -86,9 +84,7 @@ def setup_minio_bucket(bucket_name: str | None = None) -> bool:
 
         # Apply policy
         try:
-            s3_client.put_bucket_policy(
-                Bucket=bucket_name, Policy=json.dumps(bucket_policy)
-            )
+            s3_client.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(bucket_policy))
             logger.info(f"Applied public-read policy to bucket '{bucket_name}'")
         except Exception as e:
             logger.warning(f"Error setting bucket policy: {e}")
@@ -153,7 +149,6 @@ def setup_minio_bucket(bucket_name: str | None = None) -> bool:
         return True
     except Exception as e:
         logger.error(f"Error setting up MinIO bucket: {e}")
-        import traceback
 
         logger.error(traceback.format_exc())
         return False

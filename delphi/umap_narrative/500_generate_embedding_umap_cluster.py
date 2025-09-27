@@ -6,32 +6,38 @@ This script fetches conversation data from PostgreSQL, processes it using
 EVōC for hierarchical clustering, and stores results in DynamoDB for further processing.
 """
 
+import argparse
 import json
 import logging
 import os
+import traceback
 from datetime import datetime
+from typing import Any
 
 # Import from installed packages
 import evoc
 import numpy as np
-from polismath_commentgraph.utils.converter import DataConverter
 
 # Import from local modules
+from polismath_commentgraph.utils.converter import DataConverter
 from polismath_commentgraph.utils.storage import DynamoDBStorage, PostgresClient
 from sentence_transformers import SentenceTransformer
+from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
 from umap import UMAP
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
 def setup_environment(
-    db_host=None, db_port=None, db_name=None, db_user=None, db_password=None
-):
+    db_host: str | None = None,
+    db_port: int | None = None,
+    db_name: str | None = None,
+    db_user: str | None = None,
+    db_password: str | None = None,
+) -> None:
     """Set up environment variables for database connections."""
     # PostgreSQL settings
     if db_host:
@@ -79,7 +85,9 @@ def setup_environment(
         os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
 
 
-def fetch_conversation_data(zid):
+def fetch_conversation_data(
+    zid: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """
     Fetch conversation data from PostgreSQL.
 
@@ -101,7 +109,7 @@ def fetch_conversation_data(zid):
         conversation = postgres_client.get_conversation_by_id(zid)
         if not conversation:
             logger.error(f"Conversation {zid} not found in database.")
-            return None, None
+            return [], None
 
         # Get comments - include all comments, regardless of active status
         comments = postgres_client.get_comments_by_conversation(zid)
@@ -110,9 +118,7 @@ def fetch_conversation_data(zid):
         # Count active and inactive for logging purposes only
         active_count = sum(1 for c in comments if c.get("active", True))
         inactive_count = sum(1 for c in comments if not c.get("active", True))
-        logger.info(
-            f"Comment counts - Active: {active_count}, Inactive: {inactive_count}, Total: {len(comments)}"
-        )
+        logger.info(f"Comment counts - Active: {active_count}, Inactive: {inactive_count}, Total: {len(comments)}")
 
         # Create metadata
         metadata = {
@@ -132,17 +138,19 @@ def fetch_conversation_data(zid):
 
     except Exception as e:
         logger.error(f"Error fetching conversation: {str(e)}")
-        import traceback
 
         logger.error(traceback.format_exc())
-        return None, None
+        return [], None
 
     finally:
         # Clean up connection
         postgres_client.shutdown()
 
 
-def process_comments(comments, conversation_id):
+def process_comments(
+    comments: list[dict[str, Any]],
+    conversation_id: str,
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray], list[str], list[int]]:
     """
     Process comments with embedding and clustering.
 
@@ -157,9 +165,7 @@ def process_comments(comments, conversation_id):
         comment_texts: List of comment text strings
         comment_ids: List of comment IDs
     """
-    logger.info(
-        f"Processing {len(comments)} comments for conversation {conversation_id}..."
-    )
+    logger.info(f"Processing {len(comments)} comments for conversation {conversation_id}...")
 
     # Extract comment texts and IDs
     comment_texts = [c["txt"] for c in comments if c["txt"] and c["txt"].strip()]
@@ -174,9 +180,7 @@ def process_comments(comments, conversation_id):
 
     # Generate 2D projection with UMAP
     logger.info("Generating 2D projection with UMAP...")
-    document_map = UMAP(n_components=2, metric="cosine", random_state=42).fit_transform(
-        document_vectors
-    )
+    document_map = UMAP(n_components=2, metric="cosine", random_state=42).fit_transform(document_vectors)
 
     # Cluster with EVōC
     logger.info("Clustering with EVōC...")
@@ -185,9 +189,7 @@ def process_comments(comments, conversation_id):
         cluster_labels = clusterer.fit_predict(document_vectors)
         cluster_layers = clusterer.cluster_layers_
 
-        logger.info(
-            f"Found {len(np.unique(cluster_labels))} clusters at the finest level"
-        )
+        logger.info(f"Found {len(np.unique(cluster_labels))} clusters at the finest level")
         for i, layer in enumerate(cluster_layers):
             unique_clusters = np.unique(layer[layer >= 0])
             logger.info(f"Layer {i}: {len(unique_clusters)} clusters")
@@ -195,27 +197,21 @@ def process_comments(comments, conversation_id):
     except Exception as e:
         logger.error(f"Error during EVōC clustering: {e}")
         # Fallback to simple clustering
-        from sklearn.cluster import KMeans
-
         logger.info("Falling back to KMeans clustering...")
         kmeans = KMeans(n_clusters=5, random_state=42)
         cluster_labels = kmeans.fit_predict(document_vectors)
 
         # Create a simple layered clustering for demonstration
-        from sklearn.cluster import AgglomerativeClustering
-
         layer1 = AgglomerativeClustering(n_clusters=3).fit_predict(document_vectors)
         layer2 = AgglomerativeClustering(n_clusters=2).fit_predict(document_vectors)
 
         cluster_layers = [cluster_labels, layer1, layer2]
-        logger.info(
-            f"Created {len(cluster_layers)} cluster layers with fallback clustering"
-        )
+        logger.info(f"Created {len(cluster_layers)} cluster layers with fallback clustering")
 
     return document_map, document_vectors, cluster_layers, comment_texts, comment_ids
 
 
-def characterize_comment_clusters(cluster_layer, comment_texts):
+def characterize_comment_clusters(cluster_layer: np.ndarray, comment_texts: list[str]) -> dict[int, dict[str, Any]]:
     """
     Characterize comment clusters by common themes and keywords.
 
@@ -238,8 +234,8 @@ def characterize_comment_clusters(cluster_layer, comment_texts):
     transformer = TfidfTransformer()
 
     # Fit and transform the entire corpus
-    X = vectorizer.fit_transform(comment_texts)
-    X_tfidf = transformer.fit_transform(X)
+    x = vectorizer.fit_transform(comment_texts)
+    x_tfidf = transformer.fit_transform(x)
 
     # Get feature names
     feature_names = vectorizer.get_feature_names_out()
@@ -255,7 +251,7 @@ def characterize_comment_clusters(cluster_layer, comment_texts):
         cluster_comments = [comment_texts[i] for i in cluster_members]
 
         # Find top words for this cluster by TF-IDF
-        cluster_tfidf = X_tfidf[cluster_members].toarray().mean(axis=0)
+        cluster_tfidf = x_tfidf[cluster_members].toarray().mean(axis=0)
         top_indices = np.argsort(cluster_tfidf)[-10:][::-1]  # Top 10 words
         top_words = [feature_names[i] for i in top_indices]
 
@@ -275,7 +271,9 @@ def characterize_comment_clusters(cluster_layer, comment_texts):
     return cluster_characteristics
 
 
-def generate_basic_cluster_labels(cluster_characteristics):
+def generate_basic_cluster_labels(
+    cluster_characteristics: dict[int, dict[str, Any]],
+) -> dict[int, str]:
     """
     Generate basic topic labels for clusters based on their characteristics.
     This function only creates numeric topic labels (Topic 1, Topic 2, etc.)
@@ -296,8 +294,12 @@ def generate_basic_cluster_labels(cluster_characteristics):
 
 
 def process_layers_and_store_characteristics(
-    conversation_id, cluster_layers, comment_texts, output_dir=None, dynamo_storage=None
-):
+    conversation_id: str,
+    cluster_layers: list[np.ndarray],
+    comment_texts: list[str],
+    output_dir: str | None = None,
+    dynamo_storage: DynamoDBStorage | None = None,
+) -> dict[int, dict[str, Any]]:
     """
     Process layers and store cluster characteristics in DynamoDB.
 
@@ -319,14 +321,10 @@ def process_layers_and_store_characteristics(
         )
 
         # Generate cluster characteristics
-        cluster_characteristics = characterize_comment_clusters(
-            cluster_layer, comment_texts
-        )
+        cluster_characteristics = characterize_comment_clusters(cluster_layer, comment_texts)
 
         # Create basic numeric topic names
-        numeric_labels = {
-            str(i): f"Topic {i}" for i in np.unique(cluster_layer[cluster_layer >= 0])
-        }
+        numeric_labels = {str(i): f"Topic {i}" for i in np.unique(cluster_layer[cluster_layer >= 0])}
 
         # Store layer data
         layer_data[layer_idx] = {
@@ -352,9 +350,7 @@ def process_layers_and_store_characteristics(
 
             # Save numeric topic names
             with open(
-                os.path.join(
-                    output_dir, f"{conversation_id}_layer_{layer_idx}_topic_names.json"
-                ),
+                os.path.join(output_dir, f"{conversation_id}_layer_{layer_idx}_topic_names.json"),
                 "w",
             ) as f:
                 json.dump(numeric_labels, f, indent=2)
@@ -362,24 +358,20 @@ def process_layers_and_store_characteristics(
         # Store in DynamoDB if provided
         if dynamo_storage:
             # Convert and store cluster characteristics
-            logger.info(
-                f"Storing cluster characteristics for layer {layer_idx} in DynamoDB..."
-            )
+            logger.info(f"Storing cluster characteristics for layer {layer_idx} in DynamoDB...")
             characteristic_models = DataConverter.batch_convert_cluster_characteristics(
-                conversation_id, cluster_characteristics, layer_idx
+                conversation_id,
+                {str(k): v for k, v in cluster_characteristics.items()},
+                layer_idx,
             )
-            result = dynamo_storage.batch_create_cluster_characteristics(
-                characteristic_models
-            )
-            logger.info(
-                f"Stored {result['success']} cluster characteristics with {result['failure']} failures"
-            )
+            result = dynamo_storage.batch_create_cluster_characteristics(characteristic_models)
+            logger.info(f"Stored {result['success']} cluster characteristics with {result['failure']} failures")
 
     logger.info("Processing of layers and storing characteristics complete!")
     return layer_data
 
 
-def process_conversation(zid, export_dynamo=True):
+def process_conversation(zid: int, export_dynamo: bool = True) -> bool:
     """
     Main function to process a conversation, generate embeddings, and perform clustering.
 
@@ -394,24 +386,23 @@ def process_conversation(zid, export_dynamo=True):
         return False
 
     conversation_id = str(zid)
-    conversation_name = metadata.get("conversation_name", f"Conversation {zid}")
+    # conversation_name = metadata.get("conversation_name", f"Conversation {zid}")
 
     # Process comments
-    document_map, document_vectors, cluster_layers, comment_texts, comment_ids = (
-        process_comments(comments, conversation_id)
+    document_map, document_vectors, cluster_layers, comment_texts, comment_ids = process_comments(
+        comments, conversation_id
     )
 
     # Initialize DynamoDB storage
     dynamo_storage = None
     if export_dynamo:
         dynamo_storage = DynamoDBStorage(
-            region_name="us-east-1", endpoint_url=os.environ.get("DYNAMODB_ENDPOINT")
+            region_name="us-east-1",
+            endpoint_url=os.environ.get("DYNAMODB_ENDPOINT") or "http://localhost:8000",
         )
 
         # Store basic data in DynamoDB
-        logger.info(
-            f"Storing basic data in DynamoDB for conversation {conversation_id}..."
-        )
+        logger.info(f"Storing basic data in DynamoDB for conversation {conversation_id}...")
 
         # Store conversation metadata
         logger.info("Storing conversation metadata...")
@@ -422,33 +413,21 @@ def process_conversation(zid, export_dynamo=True):
 
         # Store embeddings
         logger.info("Storing comment embeddings...")
-        embedding_models = DataConverter.batch_convert_embeddings(
-            conversation_id, document_vectors
-        )
+        embedding_models = DataConverter.batch_convert_embeddings(conversation_id, document_vectors)
         result = dynamo_storage.batch_create_comment_embeddings(embedding_models)
-        logger.info(
-            f"Stored {result['success']} embeddings with {result['failure']} failures"
-        )
+        logger.info(f"Stored {result['success']} embeddings with {result['failure']} failures")
 
         # Store UMAP graph edges
         logger.info("Storing UMAP graph edges...")
-        edge_models = DataConverter.batch_convert_umap_edges(
-            conversation_id, document_map, cluster_layers
-        )
+        edge_models = DataConverter.batch_convert_umap_edges(conversation_id, document_map, cluster_layers)
         result = dynamo_storage.batch_create_graph_edges(edge_models)
-        logger.info(
-            f"Stored {result['success']} UMAP graph edges with {result['failure']} failures"
-        )
+        logger.info(f"Stored {result['success']} UMAP graph edges with {result['failure']} failures")
 
         # Store cluster assignments
         logger.info("Storing comment cluster assignments...")
-        cluster_models = DataConverter.batch_convert_clusters(
-            conversation_id, cluster_layers, document_map
-        )
+        cluster_models = DataConverter.batch_convert_clusters(conversation_id, cluster_layers, document_map)
         result = dynamo_storage.batch_create_comment_clusters(cluster_models)
-        logger.info(
-            f"Stored {result['success']} cluster assignments with {result['failure']} failures"
-        )
+        logger.info(f"Stored {result['success']} cluster assignments with {result['failure']} failures")
 
         # Store cluster topics (basic info only)
         logger.info("Storing cluster topics...")
@@ -461,9 +440,7 @@ def process_conversation(zid, export_dynamo=True):
             comments=[{"body": comment["txt"]} for comment in comments],
         )
         result = dynamo_storage.batch_create_cluster_topics(topic_models)
-        logger.info(
-            f"Stored {result['success']} topics with {result['failure']} failures"
-        )
+        logger.info(f"Stored {result['success']} topics with {result['failure']} failures")
 
     # Process layers and store characteristics
     layer_data = process_layers_and_store_characteristics(
@@ -479,14 +456,9 @@ def process_conversation(zid, export_dynamo=True):
     return True
 
 
-def main():
+def main() -> None:
     """Main entry point."""
-    # Parse arguments
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Process Polis conversation from PostgreSQL"
-    )
+    parser = argparse.ArgumentParser(description="Process Polis conversation from PostgreSQL")
     parser.add_argument(
         "--zid",
         type=int,
@@ -494,18 +466,12 @@ def main():
         default=22154,
         help="Conversation ID to process",
     )
-    parser.add_argument(
-        "--no-dynamo", action="store_true", help="Skip exporting to DynamoDB"
-    )
+    parser.add_argument("--no-dynamo", action="store_true", help="Skip exporting to DynamoDB")
     parser.add_argument("--db-host", type=str, default=None, help="PostgreSQL host")
     parser.add_argument("--db-port", type=int, default=None, help="PostgreSQL port")
-    parser.add_argument(
-        "--db-name", type=str, default=None, help="PostgreSQL database name"
-    )
+    parser.add_argument("--db-name", type=str, default=None, help="PostgreSQL database name")
     parser.add_argument("--db-user", type=str, default=None, help="PostgreSQL user")
-    parser.add_argument(
-        "--db-password", type=str, default=None, help="PostgreSQL password"
-    )
+    parser.add_argument("--db-password", type=str, default=None, help="PostgreSQL password")
     parser.add_argument(
         "--use-mock-data",
         action="store_true",
@@ -553,8 +519,8 @@ def main():
         }
 
         # Process comments to get embeddings and clustering
-        document_map, document_vectors, cluster_layers, comment_texts, comment_ids = (
-            process_comments(mock_comments, str(args.zid))
+        document_map, document_vectors, cluster_layers, comment_texts, comment_ids = process_comments(
+            mock_comments, str(args.zid)
         )
 
         # Process with mock data (store in DynamoDB if requested)

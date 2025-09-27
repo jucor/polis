@@ -12,9 +12,12 @@ import argparse
 import logging
 import os
 import sys
+import time
+import traceback
 from typing import Any
 
 import boto3
+import datamapplot
 import numpy as np
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
@@ -57,9 +60,7 @@ def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
     logger.info("Initializing S3 client for upload...")
     logger.info(f"  Bucket: {bucket_name}, Region: {region}")
     logger.info(f"  Endpoint URL: {endpoint_url if endpoint_url else 'Default AWS S3'}")
-    logger.info(
-        "  Credentials: Using Boto3's default provider chain (env, ~/.aws, IAM role)."
-    )
+    logger.info("  Credentials: Using Boto3's default provider chain (env, ~/.aws, IAM role).")
 
     try:
         s3_client = boto3.client("s3", region_name=region, endpoint_url=endpoint_url)
@@ -72,15 +73,11 @@ def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
             # If a 404 (Not Found) or 403 (Forbidden) on non-existent bucket occurs
             error_code = e.response.get("Error", {}).get("Code")
             if error_code in ["404", "NoSuchBucket", "403"]:
-                logger.warning(
-                    f"Bucket '{bucket_name}' not found or not accessible (Error: {error_code})."
-                )
+                logger.warning(f"Bucket '{bucket_name}' not found or not accessible (Error: {error_code}).")
 
                 # CRITICAL: Only attempt to create the bucket in a local dev environment.
                 if endpoint_url:
-                    logger.info(
-                        f"Local endpoint detected. Attempting to create bucket '{bucket_name}'..."
-                    )
+                    logger.info(f"Local endpoint detected. Attempting to create bucket '{bucket_name}'...")
                     s3_client.create_bucket(Bucket=bucket_name)
                     logger.info(f"Bucket '{bucket_name}' created successfully.")
                 else:
@@ -103,9 +100,7 @@ def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
         elif local_file_path.endswith(".svg"):
             extra_args["ContentType"] = "image/svg+xml"
 
-        s3_client.upload_file(
-            local_file_path, bucket_name, s3_key, ExtraArgs=extra_args
-        )
+        s3_client.upload_file(local_file_path, bucket_name, s3_key, ExtraArgs=extra_args)
 
         if endpoint_url:
             url = f"{endpoint_url.strip('/')}/{bucket_name}/{s3_key}"
@@ -133,9 +128,7 @@ def s3_upload_file(local_file_path: str, s3_key: str) -> str | bool:
 
 
 # Configure logging with less verbosity
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -153,9 +146,7 @@ def setup_file_logging(zid: int) -> None:
         file_handler.setLevel(logging.DEBUG)
 
         # Create a formatter and add it to the handler
-        formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-        )
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
         file_handler.setFormatter(formatter)
 
         # Add the handler to the logger
@@ -187,12 +178,12 @@ def log_environment_info() -> None:
         logger.error(f"Error logging environment info: {e}")
 
 
-# Import these modules here to avoid circular imports
-import time
-
-
 def setup_environment(
-    db_host=None, db_port=None, db_name=None, db_user=None, db_password=None
+    db_host: str | None = None,
+    db_port: int | None = None,
+    db_name: str | None = None,
+    db_user: str | None = None,
+    db_password: str | None = None,
 ) -> None:
     """Set up environment variables for database connections."""
     # PostgreSQL settings
@@ -230,7 +221,6 @@ def setup_environment(
 
     # DynamoDB settings (for local DynamoDB)
     if not os.environ.get("DYNAMODB_ENDPOINT"):
-
         # Log the endpoint being used
         endpoint = os.environ.get("DYNAMODB_ENDPOINT")
         logger.info(f"Using DynamoDB endpoint: {endpoint}")
@@ -247,7 +237,7 @@ def setup_environment(
     logger.info(f"- Region: {os.environ.get('AWS_REGION')}")
 
 
-def load_comment_texts(zid) -> dict[int, str] | None:
+def load_comment_texts(zid: int) -> dict[int, str] | None:
     """
     Load comment texts from PostgreSQL.
 
@@ -272,9 +262,7 @@ def load_comment_texts(zid) -> dict[int, str] | None:
             return None
 
         # Create a dictionary of comment_id to text
-        comment_dict = {
-            comment["tid"]: comment["txt"] for comment in comments if comment.get("txt")
-        }
+        comment_dict = {comment["tid"]: comment["txt"] for comment in comments if comment.get("txt")}
 
         logger.info(f"Loaded {len(comment_dict)} comments from PostgreSQL")
         return comment_dict
@@ -289,7 +277,7 @@ def load_comment_texts(zid) -> dict[int, str] | None:
 
 
 def load_conversation_data_from_dynamo(
-    zid, layer_id, dynamo_storage
+    zid: int, layer_id: int, dynamo_storage: DynamoDBStorage
 ) -> dict[str, Any] | None:
     """
     Load data from DynamoDB for a specific conversation and layer.
@@ -305,7 +293,11 @@ def load_conversation_data_from_dynamo(
     logger.info(f"Loading data from DynamoDB for conversation {zid}, layer {layer_id}")
 
     # Initialize data dictionary
-    data = {"comment_positions": {}, "cluster_assignments": {}, "topic_names": {}}
+    data: dict[str, Any] = {
+        "comment_positions": {},
+        "cluster_assignments": {},
+        "topic_names": {},
+    }
 
     # Try to get conversation metadata
     try:
@@ -315,15 +307,11 @@ def load_conversation_data_from_dynamo(
             logger.error(f"No metadata found for conversation {zid}")
             return None
 
-        logger.info(
-            f"Conversation name: {meta.get('conversation_name', f'Conversation {zid}')}"
-        )
+        logger.info(f"Conversation name: {meta.get('conversation_name', f'Conversation {zid}')}")
         logger.debug(f"Metadata: {meta}")
         data["meta"] = meta
     except Exception as e:
         logger.error(f"Error getting conversation metadata: {e}")
-        import traceback
-
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
@@ -331,16 +319,10 @@ def load_conversation_data_from_dynamo(
     try:
         # Query CommentEmbeddings for this conversation
         logger.info("Loading comment embeddings to get full comment list...")
-        table = dynamo_storage.dynamodb.Table(
-            dynamo_storage.table_names["comment_embeddings"]
-        )
-        logger.debug(
-            f"CommentEmbeddings table name: {dynamo_storage.table_names['comment_embeddings']}"
-        )
+        table = dynamo_storage.dynamodb.Table(dynamo_storage.table_names["comment_embeddings"])
+        logger.debug(f"CommentEmbeddings table name: {dynamo_storage.table_names['comment_embeddings']}")
 
-        response = table.query(
-            KeyConditionExpression=Key("conversation_id").eq(str(zid))
-        )
+        response = table.query(KeyConditionExpression=Key("conversation_id").eq(str(zid)))
         embeddings = response.get("Items", [])
 
         # Handle pagination if needed
@@ -359,24 +341,16 @@ def load_conversation_data_from_dynamo(
         logger.debug(f"Sample comment IDs: {comment_ids[:5] if comment_ids else []}")
     except Exception as e:
         logger.error(f"Error retrieving comment embeddings: {e}")
-        import traceback
-
         logger.error(f"Traceback: {traceback.format_exc()}")
 
     # Get comment clusters
     try:
         # Query CommentClusters for this conversation
         logger.info("Loading cluster assignments from CommentClusters...")
-        table = dynamo_storage.dynamodb.Table(
-            dynamo_storage.table_names["comment_clusters"]
-        )
-        logger.debug(
-            f"CommentClusters table name: {dynamo_storage.table_names['comment_clusters']}"
-        )
+        table = dynamo_storage.dynamodb.Table(dynamo_storage.table_names["comment_clusters"])
+        logger.debug(f"CommentClusters table name: {dynamo_storage.table_names['comment_clusters']}")
 
-        response = table.query(
-            KeyConditionExpression=Key("conversation_id").eq(str(zid))
-        )
+        response = table.query(KeyConditionExpression=Key("conversation_id").eq(str(zid)))
         clusters = response.get("Items", [])
 
         # Handle pagination if needed
@@ -395,20 +369,14 @@ def load_conversation_data_from_dynamo(
             logger.debug(f"Sample CommentClusters item: {clusters[0]}")
 
         # Check if any items have position data
-        position_items = [
-            item
-            for item in clusters
-            if "position" in item and isinstance(item["position"], dict)
-        ]
+        position_items = [item for item in clusters if "position" in item and isinstance(item["position"], dict)]
         logger.debug(f"Number of items with position field: {len(position_items)}")
 
         # Extract positions and cluster assignments for the specified layer
         position_column = "position"
         cluster_column = f"layer{layer_id}_cluster_id"
 
-        logger.debug(
-            f"Looking for position column '{position_column}' and cluster column '{cluster_column}'"
-        )
+        logger.debug(f"Looking for position column '{position_column}' and cluster column '{cluster_column}'")
         positions_found = 0
         clusters_found = 0
 
@@ -427,9 +395,7 @@ def load_conversation_data_from_dynamo(
                     ]
                     positions_found += 1
                     if positions_found <= 3:  # Log first few positions
-                        logger.debug(
-                            f"Found position for comment {comment_id} in CommentClusters: {pos}"
-                        )
+                        logger.debug(f"Found position for comment {comment_id} in CommentClusters: {pos}")
 
             # Extract cluster assignment for this layer
             if cluster_column in item and item[cluster_column] is not None:
@@ -442,29 +408,19 @@ def load_conversation_data_from_dynamo(
                     f"Comment {comment_id} has no cluster assignment for layer {layer_id}, marking as unclustered."
                 )
 
-        logger.info(
-            f"Extracted {positions_found} positions and {clusters_found} cluster assignments"
-        )
+        logger.info(f"Extracted {positions_found} positions and {clusters_found} cluster assignments")
 
         # If positions were not found, try to get them from UMAP graph
         if len(data["comment_positions"]) == 0:
-            logger.info(
-                "No positions found in CommentClusters, fetching from UMAPGraph..."
-            )
+            logger.info("No positions found in CommentClusters, fetching from UMAPGraph...")
 
             # Try to get positions from the UMAPGraph table
             try:
                 # Get all edges from UMAPGraph for this conversation
-                umap_table = dynamo_storage.dynamodb.Table(
-                    dynamo_storage.table_names["umap_graph"]
-                )
-                logger.debug(
-                    f"UMAPGraph table name: {dynamo_storage.table_names['umap_graph']}"
-                )
+                umap_table = dynamo_storage.dynamodb.Table(dynamo_storage.table_names["umap_graph"])
+                logger.debug(f"UMAPGraph table name: {dynamo_storage.table_names['umap_graph']}")
 
-                response = umap_table.query(
-                    KeyConditionExpression=Key("conversation_id").eq(str(zid))
-                )
+                response = umap_table.query(KeyConditionExpression=Key("conversation_id").eq(str(zid)))
                 edges = response.get("Items", [])
 
                 # Handle pagination if needed
@@ -479,34 +435,20 @@ def load_conversation_data_from_dynamo(
                 logger.info(f"Retrieved {len(edges)} edges from UMAPGraph")
 
                 # Check how many edges have position data
-                edges_with_position = [
-                    e
-                    for e in edges
-                    if "position" in e and isinstance(e["position"], dict)
-                ]
-                logger.debug(
-                    f"Number of edges with position field: {len(edges_with_position)}"
-                )
+                edges_with_position = [e for e in edges if "position" in e and isinstance(e["position"], dict)]
+                logger.debug(f"Number of edges with position field: {len(edges_with_position)}")
 
                 # Check how many are self-referencing edges
                 self_ref_edges = [
                     e
                     for e in edges
-                    if "source_id" in e
-                    and "target_id" in e
-                    and str(e["source_id"]) == str(e["target_id"])
+                    if "source_id" in e and "target_id" in e and str(e["source_id"]) == str(e["target_id"])
                 ]
                 logger.debug(f"Number of self-referencing edges: {len(self_ref_edges)}")
 
                 # Check how many self-referencing edges have position data
-                self_ref_with_pos = [
-                    e
-                    for e in self_ref_edges
-                    if "position" in e and isinstance(e["position"], dict)
-                ]
-                logger.debug(
-                    f"Number of self-referencing edges with position: {len(self_ref_with_pos)}"
-                )
+                self_ref_with_pos = [e for e in self_ref_edges if "position" in e and isinstance(e["position"], dict)]
+                logger.debug(f"Number of self-referencing edges with position: {len(self_ref_with_pos)}")
 
                 # Extract positions from edges - only self-referring edges have position data
                 positions = {}
@@ -525,9 +467,7 @@ def load_conversation_data_from_dynamo(
                         # Check if this is a self-referencing edge
                         is_self_ref = False
                         if "source_id" in edge and "target_id" in edge:
-                            is_self_ref = str(edge["source_id"]) == str(
-                                edge["target_id"]
-                            )
+                            is_self_ref = str(edge["source_id"]) == str(edge["target_id"])
 
                         # Only self-referencing edges contain the position data
                         if is_self_ref:
@@ -538,18 +478,14 @@ def load_conversation_data_from_dynamo(
                             # Don't log individual positions as they're too verbose
                             pass
 
-                logger.debug(
-                    f"Extracted {position_count} positions from self-referencing edges"
-                )
+                logger.debug(f"Extracted {position_count} positions from self-referencing edges")
 
                 # Map positions to comment IDs
                 for comment_id in data["cluster_assignments"].keys():
                     if comment_id in positions:
                         data["comment_positions"][comment_id] = positions[comment_id]
 
-                logger.info(
-                    f"Extracted {len(data['comment_positions'])} positions from UMAPGraph"
-                )
+                logger.info(f"Extracted {len(data['comment_positions'])} positions from UMAPGraph")
 
                 # If we still don't have all positions, check if we can use the comment embeddings
                 if len(data["comment_positions"]) < len(data["cluster_assignments"]):
@@ -559,38 +495,25 @@ def load_conversation_data_from_dynamo(
 
                     # Log some IDs that are missing positions
                     missing_ids = [
-                        cid
-                        for cid in data["cluster_assignments"].keys()
-                        if cid not in data["comment_positions"]
+                        cid for cid in data["cluster_assignments"].keys() if cid not in data["comment_positions"]
                     ]
-                    logger.debug(
-                        f"Sample missing comment IDs: {missing_ids[:5] if missing_ids else []}"
-                    )
+                    logger.debug(f"Sample missing comment IDs: {missing_ids[:5] if missing_ids else []}")
             except Exception as e:
                 logger.error(f"Error retrieving positions from UMAPGraph: {e}")
-                import traceback
-
                 logger.error(f"Traceback: {traceback.format_exc()}")
+
     except Exception as e:
         logger.error(f"Error retrieving comment clusters: {e}")
-        import traceback
-
         logger.error(f"Traceback: {traceback.format_exc()}")
 
     # Get topic names from LLMTopicNames
     try:
         # Query LLMTopicNames for this conversation and layer
         logger.info("Loading topic names from LLMTopicNames...")
-        table = dynamo_storage.dynamodb.Table(
-            dynamo_storage.table_names["llm_topic_names"]
-        )
-        logger.debug(
-            f"LLMTopicNames table name: {dynamo_storage.table_names['llm_topic_names']}"
-        )
+        table = dynamo_storage.dynamodb.Table(dynamo_storage.table_names["llm_topic_names"])
+        logger.debug(f"LLMTopicNames table name: {dynamo_storage.table_names['llm_topic_names']}")
 
-        response = table.query(
-            KeyConditionExpression=Key("conversation_id").eq(str(zid))
-        )
+        response = table.query(KeyConditionExpression=Key("conversation_id").eq(str(zid)))
         topic_names = response.get("Items", [])
 
         # Handle pagination if needed
@@ -617,30 +540,26 @@ def load_conversation_data_from_dynamo(
                     topic_count += 1
 
                     if topic_count <= 3:  # Log first few topic names
-                        logger.debug(
-                            f"Found topic name for cluster {cluster_id}: {topic_name}"
-                        )
+                        logger.debug(f"Found topic name for cluster {cluster_id}: {topic_name}")
 
-        logger.info(
-            f"Retrieved {len(data['topic_names'])} topic names for layer {layer_id}"
-        )
+        logger.info(f"Retrieved {len(data['topic_names'])} topic names for layer {layer_id}")
     except Exception as e:
         logger.error(f"Error retrieving topic names: {e}")
-        import traceback
-
         logger.error(f"Traceback: {traceback.format_exc()}")
 
     # Final sanity checks
     if not data["comment_positions"]:
-        logger.error(
-            "No comment positions found in any table. Visualization will fail."
-        )
+        logger.error("No comment positions found in any table. Visualization will fail.")
 
     return data
 
 
 def create_visualization(
-    zid, layer_id, data, comment_texts, output_dir=None
+    zid: int,
+    layer_id: int,
+    data: dict[str, Any],
+    comment_texts: dict[int, str],
+    output_dir: str | None = None,
 ) -> str | None:
     """
     Create and save a visualization for a specific layer.
@@ -655,12 +574,7 @@ def create_visualization(
     Returns:
         Path to the saved visualization
     """
-    # Re-import datamapplot here to ensure it's available in this function scope
-    import datamapplot
-
-    logger.info(
-        f"Starting visualization creation for conversation {zid}, layer {layer_id}"
-    )
+    logger.info(f"Starting visualization creation for conversation {zid}, layer {layer_id}")
 
     try:
         # Setup output directory if specified
@@ -673,9 +587,7 @@ def create_visualization(
             logger.debug(f"Created default output directory: {output_dir}")
 
         # Get conversation name
-        conversation_name = data.get("meta", {}).get(
-            "conversation_name", f"Conversation {zid}"
-        )
+        conversation_name = data.get("meta", {}).get("conversation_name", f"Conversation {zid}")
         logger.debug(f"Using conversation name: {conversation_name}")
 
         # Prepare data for visualization
@@ -718,9 +630,7 @@ def create_visualization(
             if pos is not None:
                 document_map_list.append(pos)
             else:
-                logger.warning(
-                    f"Missing position for comment ID {cid} - this should not happen"
-                )
+                logger.warning(f"Missing position for comment ID {cid} - this should not happen")
 
         # Convert to numpy array
         document_map = np.array(document_map_list)
@@ -740,9 +650,7 @@ def create_visualization(
 
         # Check if we have valid clusters (not just -1 which is unclustered)
         if len(unique_clusters) == 1 and unique_clusters[0] == -1:
-            logger.warning(
-                f"All comments are unclustered in layer {layer_id}, will continue with visualization anyway"
-            )
+            logger.warning(f"All comments are unclustered in layer {layer_id}, will continue with visualization anyway")
 
         # Create hover text array with comment ID and text
         logger.debug("Creating hover text array")
@@ -769,18 +677,14 @@ def create_visualization(
         label_strings_list = []
         for label in cluster_labels:
             if label >= 0:
-                label_strings_list.append(
-                    clean_topic_name(topic_names.get(label, f"Topic {label}"))
-                )
+                label_strings_list.append(clean_topic_name(topic_names.get(label, f"Topic {label}")))
             else:
                 label_strings_list.append("Unclustered")
 
         label_strings = np.array(label_strings_list)
 
         # Create visualization
-        logger.info(
-            f"Creating visualization for conversation {zid}, layer {layer_id}..."
-        )
+        logger.info(f"Creating visualization for conversation {zid}, layer {layer_id}...")
         viz_file = os.path.join(output_dir, f"{zid}_layer_{layer_id}_datamapplot.html")
 
         try:
@@ -817,9 +721,7 @@ def create_visualization(
                 return None
 
             if len(label_strings) == 0:
-                logger.error(
-                    "Label strings array is empty! Cannot create visualization."
-                )
+                logger.error("Label strings array is empty! Cannot create visualization.")
                 return None
 
             if len(hover_text) == 0:
@@ -875,9 +777,7 @@ def create_visualization(
                 if s3_url:
                     logger.info(f"Visualization uploaded to S3: {s3_url}")
                     # Save S3 URL to file for reference
-                    url_file = os.path.join(
-                        os.path.dirname(viz_file), f"{zid}_layer_{layer_id}_s3_url.txt"
-                    )
+                    url_file = os.path.join(os.path.dirname(viz_file), f"{zid}_layer_{layer_id}_s3_url.txt")
                     with open(url_file, "w") as f:
                         f.write(s3_url)
                     logger.info(f"S3 URL saved to {url_file}")
@@ -885,39 +785,29 @@ def create_visualization(
                     logger.warning("Failed to upload visualization to S3")
             except Exception as s3_error:
                 logger.error(f"Error uploading to S3: {s3_error}")
-                import traceback
-
                 logger.error(f"S3 upload traceback: {traceback.format_exc()}")
 
             return viz_file
         except Exception as e:
             logger.error(f"Error creating visualization: {e}")
             # Print full traceback for debugging
-            import traceback
-
             logger.error(f"Full traceback: {traceback.format_exc()}")
 
-            # Try to capture the datamapplot version
-            try:
-                import datamapplot
-
-                logger.info(
-                    f"Datamapplot version: {datamapplot.__version__ if hasattr(datamapplot, '__version__') else 'unknown'}"
-                )
-            except:
-                pass
+            # Log datamapplot version info
+            logger.info(f"Datamapplot version: {getattr(datamapplot, '__version__', 'unknown')}")
 
             return None
     except Exception as outer_e:
         logger.error(f"Outer error in create_visualization: {outer_e}")
-        import traceback
-
         logger.error(f"Outer traceback: {traceback.format_exc()}")
         return None
 
 
 def generate_visualization(
-    zid, layer_id=0, output_dir=None, dynamo_endpoint=None
+    zid: int,
+    layer_id: int = 0,
+    output_dir: str | None = None,
+    dynamo_endpoint: str | None = None,
 ) -> str | None:
     """
     Generate visualization for a specific conversation and layer.
@@ -936,9 +826,7 @@ def generate_visualization(
         setup_file_logging(zid)
 
         # Log environment information
-        logger.info(
-            f"Starting visualization generation for conversation {zid}, layer {layer_id}"
-        )
+        logger.info(f"Starting visualization generation for conversation {zid}, layer {layer_id}")
         log_environment_info()
 
         # Setup environment
@@ -953,9 +841,7 @@ def generate_visualization(
         logger.info(f"DynamoDB endpoint: {os.environ.get('DYNAMODB_ENDPOINT')}")
 
         # Initialize DynamoDB storage
-        dynamo_storage = DynamoDBStorage(
-            endpoint_url=os.environ.get("DYNAMODB_ENDPOINT")
-        )
+        dynamo_storage = DynamoDBStorage(endpoint_url=os.environ.get("DYNAMODB_ENDPOINT"))
         logger.debug("DynamoDB storage initialized")
 
         # Log DynamoDB table names
@@ -970,9 +856,7 @@ def generate_visualization(
         logger.info(f"Successfully loaded {len(comment_texts)} comment texts")
 
         # Load data from DynamoDB
-        logger.info(
-            f"Loading data from DynamoDB for conversation {zid}, layer {layer_id}..."
-        )
+        logger.info(f"Loading data from DynamoDB for conversation {zid}, layer {layer_id}...")
         data = load_conversation_data_from_dynamo(zid, layer_id, dynamo_storage)
         if not data:
             logger.error("Failed to load data from DynamoDB")
@@ -982,9 +866,7 @@ def generate_visualization(
         logger.info("Data summary:")
         logger.info(f"- Comment IDs: {len(data.get('comment_ids', []))}")
         logger.info(f"- Comment positions: {len(data.get('comment_positions', {}))}")
-        logger.info(
-            f"- Cluster assignments: {len(data.get('cluster_assignments', {}))}"
-        )
+        logger.info(f"- Cluster assignments: {len(data.get('cluster_assignments', {}))}")
         logger.info(f"- Topic names: {len(data.get('topic_names', {}))}")
 
         # Log more detailed information about positions for debugging
@@ -992,9 +874,7 @@ def generate_visualization(
         if positions:
             # Log a few sample positions
             sample_ids = list(positions.keys())[:5]
-            logger.debug(
-                f"Sample positions: {[(cid, positions[cid]) for cid in sample_ids]}"
-            )
+            logger.debug(f"Sample positions: {[(cid, positions[cid]) for cid in sample_ids]}")
 
             # Check and log position statistics
             x_values = [pos[0] for pos in positions.values()]
@@ -1010,30 +890,22 @@ def generate_visualization(
         viz_file = create_visualization(zid, layer_id, data, comment_texts, output_dir)
 
         if viz_file:
-            logger.info(
-                f"Successfully generated visualization for conversation {zid}, layer {layer_id}"
-            )
+            logger.info(f"Successfully generated visualization for conversation {zid}, layer {layer_id}")
             logger.info(f"Visualization saved to: {viz_file}")
             return viz_file
         else:
-            logger.error(
-                f"Failed to generate visualization for conversation {zid}, layer {layer_id}"
-            )
+            logger.error(f"Failed to generate visualization for conversation {zid}, layer {layer_id}")
             return None
 
     except Exception as e:
         logger.error(f"Unexpected error in generate_visualization: {e}")
-        import traceback
-
         logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 
-def main() -> None:
+def main() -> int:
     """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Generate DataMapPlot visualization for a layer of a conversation"
-    )
+    parser = argparse.ArgumentParser(description="Generate DataMapPlot visualization for a layer of a conversation")
     parser.add_argument(
         "--conversation_id",
         "--zid",
@@ -1041,24 +913,18 @@ def main() -> None:
         required=True,
         help="Conversation ID to process",
     )
-    parser.add_argument(
-        "--layer", type=int, default=0, help="Layer ID to visualize (default: 0)"
-    )
+    parser.add_argument("--layer", type=int, default=0, help="Layer ID to visualize (default: 0)")
     parser.add_argument(
         "--output_dir",
         type=str,
         default=None,
         help="Directory to save the visualization",
     )
-    parser.add_argument(
-        "--dynamo_endpoint", type=str, default=None, help="DynamoDB endpoint URL"
-    )
+    parser.add_argument("--dynamo_endpoint", type=str, default=None, help="DynamoDB endpoint URL")
 
     args = parser.parse_args()
 
-    logger.info(
-        f"Generating visualization for conversation {args.conversation_id}, layer {args.layer}"
-    )
+    logger.info(f"Generating visualization for conversation {args.conversation_id}, layer {args.layer}")
 
     viz_file = generate_visualization(
         args.conversation_id,

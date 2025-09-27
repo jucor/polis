@@ -28,16 +28,14 @@ test-slow: ## Run slow tests (real data tests)
 test-cov: ## Run tests with coverage
 	pytest tests/ -v --cov=polismath --cov=umap_narrative --cov-report=html --cov-report=term-missing
 
-# Code Quality
-lint: ## Run all linters
+# Code Quality - Streamlined Modern Tools
+lint: ## Run all linters (Ruff replaces flake8, isort, and more)
 	ruff check .
 	black --check .
-	flake8 .
 
-format: ## Format code
+format: ## Format code (Black + Ruff auto-fix)
 	black .
 	ruff check --fix .
-	isort .
 
 type-check: ## Run type checking
 	mypy polismath umap_narrative
