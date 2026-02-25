@@ -18,6 +18,28 @@ this avoids the confusion of having anything called a "cid", the joke was "conve
 
 this was built in two parts, the pca/kmenas/repness and the umap/narrative, and these are combined in the run_delphi.sh script.
 
+## Current PR stack (upstream: compdemocracy/polis, fork: jucor/polis)
+
+Three stacked PRs, each depending on the previous:
+
+1. **#2311** `pca_work → edge` — "Overhaul Python PCA, from NaN handling to SKLearn replacement"
+   - 30 commits. Replaces handwritten PCA with sklearn. Test infrastructure (parallel execution, fixtures, `--datasets` filter, `--include-local`). Golden snapshot regression system.
+   - **This PR may need rewriting/splitting** to make review easier — it mixes test infra, PCA migration, sign flip handling, and golden snapshot updates.
+   - Branch: `origin/pca_work`
+
+2. **#2393** `kmeans_clustering_tooling → edge` (stacked on #2311) — "Two-level clustering, Clojure comparison tooling, and test consolidation"
+   - 8 commits on top of #2311. Replaces custom K-means with sklearn. Two-level hierarchical clustering matching Clojure architecture. Cold-start Clojure math blob generator. Cluster visualization. Clojure comparison tests consolidated with xfail markers (D2, D3, D5, D7, D9, D12). Golden snapshots re-recorded.
+   - Test baseline: 11 passed, 6 xfailed, 0 failures.
+   - Delta diff: https://github.com/jucor/polis/compare/pca_work...kmeans_clustering_tooling
+   - Branch: `origin/kmeans_clustering_tooling`
+
+3. **#2394** `kmeans_analysis_docs → edge` (stacked on #2393) — "Deep analysis of Python-Clojure discrepancies and fix plan"
+   - 7 commits on top of #2393. Documentation only: deep analysis docs (`deep-analysis-for-julien/`), CLAUDE.md consolidation, discrepancy fix plan (`docs/PLAN_DISCREPANCY_FIXES.md`).
+   - Delta diff: https://github.com/jucor/polis/compare/kmeans_clustering_tooling...kmeans_analysis_docs
+   - Branch: `origin/kmeans_analysis_docs`
+
+The local working branch `kmeans_work` points to the tip of #2394. Future discrepancy fix PRs will stack on top.
+
 ## Database Interactions
 
 ### Querying Local PostgreSQL Database
