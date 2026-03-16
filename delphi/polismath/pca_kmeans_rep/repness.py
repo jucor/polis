@@ -872,56 +872,110 @@ def select_rep_comments_df(stats_df: pd.DataFrame,
     return selected
 
 
-def select_consensus_comments_df(stats_df: pd.DataFrame,
-                                  n_groups: int) -> List[Dict[str, Any]]:
+def select_consensus_comments_df(vote_matrix_df: pd.DataFrame,
+                                  mod_out: Optional[List[int]] = None) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Select consensus comments from DataFrame.
+    Select consensus comments from the overall vote matrix.
+
+    Matches Clojure's consensus-stats + select-consensus-comments (repness.clj:281-320).
+    Consensus is computed on the OVERALL vote matrix (not per-group): for each
+    comment, count agrees/disagrees across ALL participants, then select the top 5
+    agree and top 5 disagree consensus comments.
 
     Args:
-        stats_df: DataFrame with all (group, comment) statistics
-        n_groups: Number of groups
+        vote_matrix_df: Full vote matrix (participants × comments).
+            Values: 1 = agree, -1 = disagree, 0 = pass, NaN = unvoted.
+        mod_out: Optional list of moderated-out comment IDs to exclude.
 
     Returns:
-        List of consensus comment dicts
+        Dict with 'agree' and 'disagree' lists, each containing up to 5 entries:
+        {tid, n-success, n-trials, p-success, p-test}
     """
-    if stats_df.empty:
-        return []
+    empty = {'agree': [], 'disagree': []}
 
-    # Group by comment and check if all groups have high agreement
-    stats_reset = stats_df.reset_index()
-    comment_stats = stats_reset.groupby('comment').agg(
-        min_pa=('pa', 'min'),
-        avg_pa=('pa', 'mean'),
-        group_count=('group_id', 'count')
-    )
+    if vote_matrix_df.empty:
+        return empty
 
-    # Filter to comments where all groups agree (pa > 0.6 for all)
-    # and present in all groups
-    consensus = comment_stats[
-        (comment_stats['min_pa'] > 0.6) &
-        (comment_stats['group_count'] == n_groups)
-    ].copy()
+    # Exclude moderated-out comments
+    cols = vote_matrix_df.columns
+    if mod_out:
+        cols = [c for c in cols if c not in set(mod_out)]
+    if len(cols) == 0:
+        return empty
 
-    if consensus.empty:
-        return []
+    matrix = vote_matrix_df[cols]
 
-    # Sort by average agreement and take top 2
-    consensus = consensus.nlargest(2, 'avg_pa')
+    # Compute per-comment stats across ALL participants (Clojure: consensus-stats)
+    # na = count of agrees (vote == 1), nd = count of disagrees (vote == -1)
+    # ns = count of non-NaN votes (agrees + disagrees + passes)
+    na = (matrix == 1).sum(axis=0)
+    nd = (matrix == -1).sum(axis=0)
+    ns = matrix.notna().sum(axis=0) - (matrix == 0).sum(axis=0)
+    # ns should count actual votes (agree + disagree), not passes
+    # Clojure's count-votes without vote arg counts non-nil entries,
+    # but the data has 0 for pass and nil for unvoted.
+    # Actually re-reading Clojure: (count (filter identity votes)) where identity
+    # filters out nil/false. In Clojure vote values are -1, 0, 1, nil.
+    # 0 is truthy in Clojure! So ns = count of non-nil = agrees + disagrees + passes.
+    ns = matrix.notna().sum(axis=0)
 
-    # Convert to list of dicts using _stats_row_to_dict for legacy format
-    result = []
-    for comment_id in consensus.index:
-        comment_rows = stats_reset[stats_reset['comment'] == comment_id]
-        # Convert each row to legacy dict format
-        stats_list = [_stats_row_to_dict(row) for _, row in comment_rows.iterrows()]
-        result.append({
-            'comment_id': comment_id,
-            'avg_agree': consensus.loc[comment_id, 'avg_pa'],
-            'repful': 'consensus',
-            'stats': stats_list
-        })
+    # pa, p_d with Beta(2,2) prior: (na+1)/(ns+2), (nd+1)/(ns+2)
+    # Note: p_d avoids shadowing the pandas 'pd' module alias
+    pa = (na + 1) / (ns + 2)
+    p_d = (nd + 1) / (ns + 2)
 
-    return result
+    # pat, pdt using prop_test (one-proportion z-test with built-in +1 regularization)
+    pat = prop_test_vectorized(na, ns)
+    pdt = prop_test_vectorized(nd, ns)
+
+    # Ranking metrics: am = pa * pat, dm = p_d * pdt
+    am = pa * pat
+    dm = p_d * pdt
+
+    # Build a DataFrame for filtering/sorting
+    stats = pd.DataFrame({
+        'tid': cols,
+        'na': na.values, 'nd': nd.values, 'ns': ns.values,
+        'pa': pa.values, 'pd': p_d.values,
+        'pat': pat.values, 'pdt': pdt.values,
+        'am': am.values, 'dm': dm.values,
+    })
+
+    def _top_5(cons_for: str) -> List[Dict[str, Any]]:
+        """Select top 5 consensus comments for agree or disagree."""
+        if cons_for == 'agree':
+            prob_col, test_col, metric_col = 'pa', 'pat', 'am'
+            n_success_col = 'na'
+        else:
+            prob_col, test_col, metric_col = 'pd', 'pdt', 'dm'
+            n_success_col = 'nd'
+
+        # Filter: probability > 0.5 AND z-score significant at 90%
+        mask = (stats[prob_col] > 0.5) & (stats[test_col] > Z_90)
+        filtered = stats[mask].copy()
+
+        if filtered.empty:
+            return []
+
+        # Sort by metric descending, take 5
+        filtered = filtered.nlargest(5, metric_col)
+
+        # Format output to match Clojure: {tid, n-success, n-trials, p-success, p-test}
+        result = []
+        for _, row in filtered.iterrows():
+            result.append({
+                'tid': int(row['tid']),
+                'n-success': int(row[n_success_col]),
+                'n-trials': int(row['ns']),
+                'p-success': float(row[prob_col]),
+                'p-test': float(row[test_col]),
+            })
+        return result
+
+    return {
+        'agree': _top_5('agree'),
+        'disagree': _top_5('disagree'),
+    }
 
 
 def _stats_row_to_dict(row: pd.Series) -> Dict[str, Any]:
@@ -968,7 +1022,7 @@ def conv_repness(vote_matrix_df: pd.DataFrame, group_clusters: List[Dict[str, An
     empty_result = {
         'comment_ids': vote_matrix_df.columns.tolist(),
         'group_repness': {group['id']: [] for group in group_clusters},
-        'consensus_comments': [],
+        'consensus_comments': {'agree': [], 'disagree': []},
         'comment_repness': []
     }
 
@@ -1031,16 +1085,12 @@ def conv_repness(vote_matrix_df: pd.DataFrame, group_clusters: List[Dict[str, An
             print(f"Error selecting representative comments for group {group_id}: {e}")
             result['group_repness'][group_id] = []
 
-    # Add consensus comments if there are multiple groups
+    # Add consensus comments computed from the OVERALL vote matrix
+    # (not per-group stats), matching Clojure's consensus-stats + select-consensus-comments
     try:
-        if len(group_clusters) > 1:
-            result['consensus_comments'] = select_consensus_comments_df(
-                stats_df, len(group_clusters)
-            )
-        else:
-            result['consensus_comments'] = []
+        result['consensus_comments'] = select_consensus_comments_df(vote_matrix_df)
     except Exception as e:
         print(f"Error selecting consensus comments: {e}")
-        result['consensus_comments'] = []
+        result['consensus_comments'] = {'agree': [], 'disagree': []}
 
     return result

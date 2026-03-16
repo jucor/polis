@@ -104,11 +104,15 @@ class TestRepnessImplementation:
         # Check consensus comments if present
         if 'consensus_comments' in repness_results:
             consensus = repness_results['consensus_comments']
-            logger.debug(f"Consensus comments: {len(consensus)}")
+            # Consensus is now a dict with 'agree' and 'disagree' keys
+            assert isinstance(consensus, dict), f"consensus_comments should be dict, got {type(consensus)}"
+            assert 'agree' in consensus
+            assert 'disagree' in consensus
+            total = len(consensus['agree']) + len(consensus['disagree'])
+            logger.debug(f"Consensus comments: {total} (agree={len(consensus['agree'])}, disagree={len(consensus['disagree'])})")
 
-            if len(consensus) > 0:
-                comment = consensus[0]
-                assert 'comment_id' in comment
+            for entry in consensus['agree'] + consensus['disagree']:
+                assert 'tid' in entry
 
         logger.debug("✓ Representativeness structure validated")
 

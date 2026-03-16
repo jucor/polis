@@ -744,7 +744,7 @@ class Conversation:
             self.repness = {
                 'comment_ids': list(self.rating_mat.columns),
                 'group_repness': {},
-                'consensus_comments': []
+                'consensus_comments': {'agree': [], 'disagree': []}
             }
             logger.info(f"Representativeness completed in {time.time() - start_time:.2f}s (no groups)")
             return

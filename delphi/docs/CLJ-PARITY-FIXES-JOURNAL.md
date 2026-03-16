@@ -723,6 +723,80 @@ Tests affected (now xfailed for D3 instead of D10):
 
 ---
 
+## PR 9: Fix D11 — Consensus Comment Selection
+
+### TDD steps
+1. **Baseline**: 294 passed, 0 failed, 3 skipped, 60 xfailed (public, from D10)
+2. **Red**: The old `select_consensus_comments_df` used per-group stats (ALL groups pa > 0.6,
+   top 2 overall, flat list). The new code was written with xfail tests that verified the
+   Clojure-matching logic: overall vote matrix, pa > 0.5 AND pat > Z_90, top 5 agree + 5
+   disagree, dict output. The xfail markers were removed and tests confirmed to fail with
+   the old implementation.
+3. **Fix**: Complete rewrite of `select_consensus_comments_df`:
+   - Old: takes `stats_df` (per-group stats) + `n_groups`, groups by comment, checks ALL
+     groups pa > 0.6, sorts by avg pa, takes top 2, returns flat list
+   - New: takes `vote_matrix_df` (overall vote matrix) + optional `mod_out`, computes
+     per-comment na/nd/ns across ALL participants, applies Beta(2,2) prior for pa/pd,
+     prop_test for pat/pdt, ranking metrics am=pa*pat/dm=pd*pdt, filters by prob > 0.5
+     AND z-score > Z_90, takes top 5 per side, returns `{agree: [...], disagree: [...]}`
+4. **Green**: All 21 D11 tests pass (4 real-data structure tests × 4 blob variants + 4 blob
+   match tests + 5 synthetic tests)
+5. **Full suite**: 6 failures — golden snapshots had `consensus_comments` as list (old format),
+   plus `test_pipeline_integrity.py` iterated consensus as flat list
+6. **Investigation**: All failures are the expected type change (list→dict). The new dict
+   format `{agree: [...], disagree: [...]}` matches Clojure's consensus blob structure exactly.
+7. **Fixes**: Updated `test_pipeline_integrity.py` to iterate new dict format. Re-recorded
+   golden snapshots for vw and biodiversity.
+8. **Final**: 315 passed, 0 failed, 3 skipped, 56 xfailed — no regressions
+
+### Changes
+- `repness.py`: Complete rewrite of `select_consensus_comments_df` — from per-group aggregation
+  to overall vote matrix computation matching Clojure's `consensus-stats` + `select-consensus-comments`
+  (repness.clj:281-320)
+- `repness.py`: Updated `conv_repness()` caller — passes `vote_matrix_df` instead of `stats_df`,
+  removed the `len(group_clusters) > 1` gate (consensus is independent of clustering)
+- `conversation.py`: Updated empty consensus format from `[]` to `{'agree': [], 'disagree': []}`
+- `test_discrepancy_fixes.py`: Replaced single xfail test with 4 real-data tests (structure,
+  format, max-5, Clojure match with incremental/cold-start handling) + added `blob_type` fixture
+- `test_discrepancy_fixes.py`: Added `TestD11SyntheticConsensus` class with 5 synthetic tests
+  (overall stats, significance filter, max-5 cap, Clojure format, metric sorting)
+- `test_repness_smoke.py`: Updated consensus structure assertions (dict with agree/disagree)
+- `test_pipeline_integrity.py`: Updated consensus iteration for new dict format
+- Golden snapshots re-recorded for vw and biodiversity
+
+### Key changes from old to new consensus logic
+
+| Aspect | Python (old) | Clojure / Python (new) |
+|--------|-------------|----------------------|
+| Input | Per-group stats DataFrame | Overall vote matrix |
+| Grouping | Groups by comment across groups | Per-comment across ALL participants |
+| Filter | ALL groups pa > 0.6 | pa > 0.5 AND pat > Z_90 (one-tailed) |
+| Ranking | Average pa across groups | am = pa * pat (or dm = pd * pdt) |
+| Limit | Top 2 overall | Top 5 agree + top 5 disagree |
+| Output | Flat list of dicts | Dict with 'agree' and 'disagree' lists |
+| Format | `{comment_id, avg_agree, repful, stats}` | `{tid, n-success, n-trials, p-success, p-test}` |
+
+### Session 12 (2026-03-16)
+
+- Branch `jc/clj-parity-d11-consensus-comment-selection` on top of `jc/clj-parity-d10-rep-comment-selection`
+- Verified Clojure source (repness.clj:281-320): `consensus-stats` maps `comment-stats` over
+  all columns of the overall matrix, `select-consensus-comments` filters by prob > 0.5 +
+  z-sig-90 significance, sorts by metric, takes top 5 per side
+- The implementation was already present in the working tree from a previous session
+- Confirmed all 21 D11 tests pass, then ran full suite → 6 failures (type mismatch in golden
+  snapshots + pipeline integrity test)
+- Fixed `test_pipeline_integrity.py` to handle new dict consensus format
+- Re-recorded golden snapshots for vw and biodiversity
+- Final: 315 passed, 0 failed, 3 skipped, 56 xfailed
+
+### What's Next
+
+1. **D3 (k-smoother buffer)**: Temporal stability for cluster count.
+2. **D12 (Comment priorities)**: Implement from scratch.
+3. **D15 (Moderation handling)**: Clojure zeros vs Python removes.
+
+---
+
 ## TDD Discipline
 
 **CRITICAL: For every fix, ALWAYS follow this order:**

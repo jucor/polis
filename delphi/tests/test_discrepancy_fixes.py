@@ -166,6 +166,11 @@ def conv(conversation_data):
     return conversation_data['conv']
 
 
+@pytest.fixture(scope="class")
+def blob_type(conversation_data):
+    return conversation_data['blob_type']
+
+
 # ---------------------------------------------------------------------------
 # Helpers for extracting Clojure repness data
 # ---------------------------------------------------------------------------
@@ -1376,33 +1381,102 @@ class TestD10RepCommentSelection:
 @pytest.mark.clojure_comparison
 class TestD11ConsensusSelection:
     """
-    D11: Python uses ALL groups pa > 0.6, top 2 overall
-         Clojure uses per-comment pa > 0.5, top 5 agree + 5 disagree with z-test scores
+    D11: Consensus comment selection.
+
+    Python (old): Groups by comment across groups, checks ALL groups pa > 0.6,
+                  takes top 2 by average pa. Flat list output.
+
+    Clojure (target): Computes comment-stats on the OVERALL vote matrix (not
+                      per-group). For agree: pa > 0.5 AND z-sig-90?(pat), sorted
+                      by am=pa*pat, take 5. For disagree: pd > 0.5 AND
+                      z-sig-90?(pdt), sorted by dm=pd*pdt, take 5.
+                      Returns {agree: [...], disagree: [...]}.
     """
 
-    @pytest.mark.xfail(reason="D11: Different consensus selection logic than Clojure")
-    def test_consensus_matches_clojure(self, conv, clojure_blob, dataset_name):
-        """Consensus comments should match Clojure's selection."""
+    def test_consensus_returns_agree_disagree_structure(self, conv, clojure_blob, dataset_name):
+        """Consensus output should have separate agree and disagree lists."""
+        py_consensus = conv.repness.get('consensus_comments', {}) if conv.repness else {}
+        # Must be a dict with 'agree' and 'disagree' keys (not a flat list)
+        check.is_instance(py_consensus, dict,
+                          f"consensus_comments should be a dict, got {type(py_consensus)}")
+        check.is_true('agree' in py_consensus,
+                       "consensus_comments should have 'agree' key")
+        check.is_true('disagree' in py_consensus,
+                       "consensus_comments should have 'disagree' key")
+
+    def test_consensus_entry_format(self, conv, clojure_blob, dataset_name):
+        """Each consensus entry should have Clojure-compatible fields."""
+        py_consensus = conv.repness.get('consensus_comments', {}) if conv.repness else {}
+        if not isinstance(py_consensus, dict):
+            pytest.skip("consensus_comments is not a dict (fix structure first)")
+
+        for side in ('agree', 'disagree'):
+            entries = py_consensus.get(side, [])
+            for entry in entries:
+                check.is_true('tid' in entry,
+                              f"Missing 'tid' in {side} consensus entry")
+                check.is_true('n-success' in entry,
+                              f"Missing 'n-success' in {side} consensus entry")
+                check.is_true('n-trials' in entry,
+                              f"Missing 'n-trials' in {side} consensus entry")
+                check.is_true('p-success' in entry,
+                              f"Missing 'p-success' in {side} consensus entry")
+                check.is_true('p-test' in entry,
+                              f"Missing 'p-test' in {side} consensus entry")
+
+    def test_consensus_max_5_per_side(self, conv, clojure_blob, dataset_name):
+        """Each side should have at most 5 entries."""
+        py_consensus = conv.repness.get('consensus_comments', {}) if conv.repness else {}
+        if not isinstance(py_consensus, dict):
+            pytest.skip("consensus_comments is not a dict (fix structure first)")
+
+        check.less_equal(len(py_consensus.get('agree', [])), 5,
+                          "Agree consensus should have at most 5 entries")
+        check.less_equal(len(py_consensus.get('disagree', [])), 5,
+                          "Disagree consensus should have at most 5 entries")
+
+    def test_consensus_matches_clojure(self, conv, clojure_blob, dataset_name, blob_type):
+        """Consensus comments should match Clojure's selection.
+
+        Consensus uses the overall vote matrix (not per-group), so it's
+        independent of clustering (D3). Cold-start blobs should match exactly.
+        Incremental blobs may differ because the in-conv participant set was
+        built progressively, affecting which participants' votes are included
+        in the overall matrix.
+        """
         clj_consensus = clojure_blob.get('consensus', {})
         if not clj_consensus:
             pytest.skip("No consensus in Clojure blob")
 
-        # Clojure consensus has 'agree' and 'disagree' keys
-        clj_agree_tids = set(e['tid'] for e in clj_consensus.get('agree', []))
-        clj_disagree_tids = set(e['tid'] for e in clj_consensus.get('disagree', []))
-        clj_all = clj_agree_tids | clj_disagree_tids
+        clj_agree_tids = [e['tid'] for e in clj_consensus.get('agree', [])]
+        clj_disagree_tids = [e['tid'] for e in clj_consensus.get('disagree', [])]
 
-        py_consensus = conv.repness.get('consensus_comments', []) if conv.repness else []
-        py_tids = set(int(c['comment_id']) for c in py_consensus)
+        py_consensus = conv.repness.get('consensus_comments', {}) if conv.repness else {}
+        if not isinstance(py_consensus, dict):
+            pytest.fail("consensus_comments should be a dict with agree/disagree keys")
 
-        print(f"[{dataset_name}] Consensus: Clojure agree={sorted(clj_agree_tids)}, disagree={sorted(clj_disagree_tids)}")
-        print(f"[{dataset_name}] Consensus: Python={sorted(py_tids)}")
+        py_agree_tids = [e['tid'] for e in py_consensus.get('agree', [])]
+        py_disagree_tids = [e['tid'] for e in py_consensus.get('disagree', [])]
 
-        overlap = len(clj_all & py_tids)
-        print(f"[{dataset_name}] Consensus overlap: {overlap}/{len(clj_all)}")
+        print(f"[{dataset_name}] Consensus agree: Clojure={clj_agree_tids}, Python={py_agree_tids}")
+        print(f"[{dataset_name}] Consensus disagree: Clojure={clj_disagree_tids}, Python={py_disagree_tids}")
 
-        check.equal(py_tids, clj_all,
-                     f"Consensus mismatch: Python={sorted(py_tids)}, Clojure={sorted(clj_all)}")
+        if blob_type == 'incremental':
+            # Incremental blobs have different in-conv sets (built progressively),
+            # so the overall vote matrix may differ → consensus may differ.
+            # Just check structure and overlap, not exact match.
+            py_agree_set = set(py_agree_tids)
+            clj_agree_set = set(clj_agree_tids)
+            overlap = len(py_agree_set & clj_agree_set)
+            print(f"[{dataset_name}] Incremental agree overlap: {overlap}/{len(clj_agree_set)}")
+            # At least some overlap expected
+            if clj_agree_set:
+                check.greater(overlap, 0, f"No overlap in agree consensus (incremental)")
+        else:
+            check.equal(py_agree_tids, clj_agree_tids,
+                         f"Agree consensus mismatch")
+            check.equal(py_disagree_tids, clj_disagree_tids,
+                         f"Disagree consensus mismatch")
 
 
 # ============================================================================
@@ -1592,6 +1666,119 @@ class TestD15SyntheticModeration:
         assert len(conv.rating_mat.columns) == 4
         # Original values intact
         assert conv.rating_mat[0].values[0] == 1.0
+
+
+class TestD11SyntheticConsensus:
+    """
+    Synthetic tests for D11 consensus selection logic.
+
+    Clojure computes consensus on the OVERALL vote matrix (not per-group):
+    - For each comment, compute na/nd/ns across ALL participants
+    - pa = (na+1)/(ns+2), pd = (nd+1)/(ns+2) (Beta(2,2) prior)
+    - pat = prop_test(na, ns), pdt = prop_test(nd, ns)
+    - am = pa * pat, dm = pd * pdt (ranking metric)
+    - Agree: pa > 0.5 AND pat > Z_90, sorted by am desc, take 5
+    - Disagree: pd > 0.5 AND pdt > Z_90, sorted by dm desc, take 5
+    """
+
+    def test_consensus_uses_overall_stats_not_per_group(self):
+        """Consensus should be computed from the whole matrix, not grouped."""
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_consensus_comments_df
+
+        # 20 participants, 3 comments. Comment 0: strong agree for all.
+        # Comment 1: mixed. Comment 2: strong disagree for all.
+        np.random.seed(42)
+        n_ptpts = 20
+        votes = pd.DataFrame({
+            0: [1] * 18 + [-1] * 2,   # Strong agree: na=18, ns=20
+            1: [1] * 10 + [-1] * 10,  # Mixed: na=10, nd=10, ns=20
+            2: [-1] * 18 + [1] * 2,   # Strong disagree: nd=18, ns=20
+        })
+
+        result = select_consensus_comments_df(votes)
+
+        # Should be a dict with agree/disagree
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert 'agree' in result
+        assert 'disagree' in result
+
+        agree_tids = [e['tid'] for e in result['agree']]
+        disagree_tids = [e['tid'] for e in result['disagree']]
+
+        # Comment 0 should be in agree consensus (strong overall agree)
+        assert 0 in agree_tids, f"Comment 0 should be agree consensus, got {agree_tids}"
+        # Comment 2 should be in disagree consensus (strong overall disagree)
+        assert 2 in disagree_tids, f"Comment 2 should be disagree consensus, got {disagree_tids}"
+        # Comment 1 is mixed — should NOT appear in either
+        assert 1 not in agree_tids, f"Comment 1 should not be agree consensus"
+        assert 1 not in disagree_tids, f"Comment 1 should not be disagree consensus"
+
+    def test_consensus_filters_by_significance(self):
+        """Comments must pass z-sig-90 to be consensus."""
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_consensus_comments_df
+
+        # Very small sample: 3 participants, 1 comment. pa > 0.5 but pat < Z_90
+        votes = pd.DataFrame({0: [1, 1, -1]})  # na=2, ns=3
+        # pa = (2+1)/(3+2) = 0.6 > 0.5 ✓
+        # pat = 2*sqrt(4)*((3/4)-0.5) = 2*2*0.25 = 1.0 < 1.2816 ✗
+
+        result = select_consensus_comments_df(votes)
+        assert len(result['agree']) == 0, \
+            f"Comment with pat < Z_90 should not be consensus, got {result['agree']}"
+
+    def test_consensus_max_5_per_side(self):
+        """At most 5 agree + 5 disagree consensus comments."""
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_consensus_comments_df
+
+        # 8 comments with strong agree, all pass filters
+        n_ptpts = 50
+        data = {}
+        for tid in range(8):
+            data[tid] = [1] * 45 + [-1] * 5  # na=45, ns=50
+        votes = pd.DataFrame(data)
+
+        result = select_consensus_comments_df(votes)
+        assert len(result['agree']) <= 5, \
+            f"Agree consensus should be capped at 5, got {len(result['agree'])}"
+
+    def test_consensus_entry_has_clojure_format(self):
+        """Each entry should have tid, n-success, n-trials, p-success, p-test."""
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_consensus_comments_df
+
+        votes = pd.DataFrame({0: [1] * 30 + [-1] * 5})  # Strong agree
+        result = select_consensus_comments_df(votes)
+
+        if result['agree']:
+            entry = result['agree'][0]
+            assert 'tid' in entry, "Missing 'tid'"
+            assert 'n-success' in entry, "Missing 'n-success'"
+            assert 'n-trials' in entry, "Missing 'n-trials'"
+            assert 'p-success' in entry, "Missing 'p-success'"
+            assert 'p-test' in entry, "Missing 'p-test'"
+            # Verify values
+            assert entry['tid'] == 0
+            assert entry['n-success'] == 30  # na
+            assert entry['n-trials'] == 35   # ns (non-NaN votes)
+
+    def test_consensus_sorted_by_metric(self):
+        """Agree entries sorted by am=pa*pat descending."""
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_consensus_comments_df
+
+        # Two comments with different agree strength
+        votes = pd.DataFrame({
+            0: [1] * 40 + [-1] * 10,  # na=40, ns=50 → stronger
+            1: [1] * 30 + [-1] * 20,  # na=30, ns=50 → weaker
+        })
+
+        result = select_consensus_comments_df(votes)
+        agree_tids = [e['tid'] for e in result['agree']]
+        # Comment 0 has higher pa and pat → should come first
+        assert agree_tids[0] == 0, f"Comment 0 should rank first, got {agree_tids}"
 
 
 # ============================================================================

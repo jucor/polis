@@ -468,7 +468,7 @@ See `delphi/docs/HANDOFF_K_DIVERGENCE_INVESTIGATION.md` for detailed context.
 | D8 | Finalize cmt stats | PR 7 | — | **DONE** ✓ |
 | D9 | Z-score thresholds | **PR 3** | **#2446** | **DONE** ✓ |
 | D10 | Rep comment selection | PR 8 | — | **DONE** ✓ |
-| D11 | Consensus selection | PR 9 | — | Fix (with legacy env var) |
+| D11 | Consensus selection | PR 9 | — | **DONE** ✓ |
 | D12 | Comment priorities | PR 11 | — | Fix (implement from scratch) |
 | D13 | Subgroup clustering | — | — | **Deferred** (unused) |
 | D14 | Large conv optimization | — | — | **Deferred** (Python fast enough) |
