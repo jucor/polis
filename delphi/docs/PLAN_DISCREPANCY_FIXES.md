@@ -472,8 +472,8 @@ See `delphi/docs/HANDOFF_K_DIVERGENCE_INVESTIGATION.md` for detailed context.
 | D12 | Comment priorities | PR 11 | — | Fix (implement from scratch) |
 | D13 | Subgroup clustering | — | — | **Deferred** (unused) |
 | D14 | Large conv optimization | — | — | **Deferred** (Python fast enough) |
-| D15 | Moderation handling | PR 12 | — | Fix |
-| K-inv | Cold-start k divergence | (investigation) | — | Investigate after D15 |
+| D15 | Moderation handling | PR 12 | — | **DONE** ✓ |
+| K-inv | Cold-start k divergence | (investigation) | — | Branch off D15 (D2+D15 done, clustering independent of repness) |
 
 ### Non-discrepancy PRs in the stack
 

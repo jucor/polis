@@ -587,8 +587,77 @@ already capture the relative group difference.
 
 ### What's Next
 
-1. **PR 8 — Fix D10 (Rep comment selection)**: Match Clojure's single-pass selection with
-   beats-best-by-test, up to 5 total (agrees first).
+1. **PR 14 refactor**: Extract stats computation from `compute_group_comment_stats_df` for
+   testability, then add vectorized blob injection tests.
+2. Review remaining VM fixes: D15, D10, D11, D3, D12, D1, PR15.
+3. K-divergence investigation (separate session off D15 branch).
+
+---
+
+## Review Session (2026-03-17)
+
+### What was done
+
+**Reviewed and created draft PRs for D5, D6, D7, D8:**
+- #2448 (D5), #2449 (D6), #2450 (D7), #2451 (D8) — all draft
+- Reviewed production code, tests, docs, golden snapshots for each
+- D6: restored dropped Clojure XXX comment about pi_hat==1 edge case
+- D7: confirmed no feature flag needed (old formula doubly wrong)
+- D8: noted (1-pd) = pa identity, confirming old disagree formula was backwards
+
+**Added blob injection tests (scalar path):**
+- D5: `prop_test(n_success, n_trials)` vs blob `p-test` — RED→GREEN verified
+- D6: `two_prop_test(group counts)` vs blob `repness-test` — RED→GREEN verified
+- D4: `(n_success+1)/(n_trials+2)` vs blob `p-success` — passes (already fixed)
+- D8: `rat > rdt` vs blob `repful-for` — passes (D6 fix makes rat/rdt correct)
+
+**Key discovery: formula-only tests are tautological.** They verify our code matches our
+reading of the Clojure source — if we misread it, the test passes and the code is wrong.
+Only blob injection tests (comparing against real Clojure output) catch real mismatches.
+Every fix PR must now include blob comparison tests.
+
+**Key discovery: Python and Clojure pick different k (vw: Python=4, Clojure=2).**
+Both use silhouette. The divergence comes from upstream PCA/clustering differences
+(sklearn SVD vs Clojure power iteration). This is independent of all repness fixes
+(D4-D11). Investigation planned off D15 branch. See
+`delphi/docs/HANDOFF_K_DIVERGENCE_INVESTIGATION.md`.
+
+**Key discovery: `n-trials` in Clojure blob = `S` (total seen, including passes),**
+not `A+D` (agrees + disagrees). Verified: `prop_test(11, 14)` = blob `p-test` for
+tid=49 group 0 in vw, where A=2, D=11, S=14, A+D=13.
+
+**Infrastructure fixes:**
+- CI: added `jc/**` to `pull_request.branches` in `python-ci.yml` (bottom of stack)
+- CI: `find_dotenv()` + `DATABASE_*` fallback in `test_postgres_real_data.py`
+- CI: removed dead `POSTGRES_*` exec vars from workflow
+- All stack PRs now have passing CI (Delphi Python Tests)
+
+**Stack reordering:**
+- D15 moved before D10 (was after D3) — prerequisite for k-divergence investigation
+- New order: D8 → D15 → D10 → D11 → D3 → D12 → D1 → PR15
+- D15 only touches `conversation.py`, independent of repness fixes
+
+**Vectorized blob injection tests: deferred.** The `compute_group_comment_stats_df`
+function is too monolithic to test in isolation — it builds its own DataFrame from
+raw inputs. PR 14 refactor (extract stats computation) is needed first to make the
+vectorized path testable. Plan: refactor at base of repness chain, then re-climb
+adding vectorized blob tests at each stage.
+
+### Session 11 (2026-03-17)
+
+- Fetched 6 new VM branches (D10, D11, D3, D15, D12, D1) + PR15
+- Reviewed D5, D6, D7, D8 code, tests, docs — all approved with minor fixes
+- Created draft PRs #2448-#2451 on GitHub
+- Cleaned macOS resource fork artifacts from VM private data repo
+- Fetched private data snapshots from VM (D5+D6 committed, D7+D8 uncommitted on VM)
+- Updated stack titles (17 PRs)
+- Discovered CI wasn't running Python tests on `jc/**` PRs — fixed
+- Discovered `jc/fix-test-db-connection` broke CI (hardcoded .env path + no DATABASE_URL fallback) — fixed
+- Added blob injection tests to D5 (RED→GREEN), D6 (RED→GREEN), D8 branches
+- Investigated k divergence: Python=4, Clojure=2 on vw cold-start
+- Created handoff doc and plan section for k-divergence investigation
+- Reordered stack: D15 before D10 for k-investigation prereq
+- Rebased full chain (D15 → D10 → D11 → D3 → D12 → D1 → PR15) onto new D8
 
 ---
 
@@ -639,6 +708,60 @@ to create a new worktree. If yes, provide a prompt they can use to start that se
 > stacked on `<previous-branch>`. Read `delphi/docs/CLJ-PARITY-FIXES-JOURNAL.md`
 > and `delphi/docs/CLJ-PARITY-FIXES-PLAN.md` for context. Follow the TDD discipline
 > documented in the journal.
+
+---
+
+## Session: Fix D15 — Moderation Handling (2026-03-16)
+
+### Branch: `jc/clj-parity-d15-moderation-handling-zeros-vs-removes`
+
+### What was done
+
+Fixed D15: Python now zeros out moderated-out comment columns instead of removing them,
+matching Clojure's `zero-out-columns` behavior (named_matrix.clj:214-230).
+
+**The discrepancy**: Python's `_apply_moderation()` removed moderated-out columns from
+`rating_mat` entirely (`raw_rating_mat.loc[keep_ptpts, keep_comments]`). Clojure zeros
+them out (`matrix/set-column m' i 0`), preserving matrix structure.
+
+**The fix**: Changed `_apply_moderation()` to:
+1. Still remove moderated-out participants (rows) — unchanged
+2. Zero out moderated-out comment columns instead of removing them
+3. `rating_mat` now has the same column count as `raw_rating_mat`
+
+**Impact on downstream**:
+- `tids` output now includes moderated-out tids (matching Clojure)
+- PCA: zeroed columns contribute nothing to variance, so PCA results are effectively identical
+- Repness: zeroed columns get na=0, nd=0, failing significance — effectively excluded
+- Vote counting: `user-vote-counts` in `to_math_blob()` uses `rating_mat`, so moderated
+  columns now count as "pass" votes (matching Clojure's behavior with zeroed columns)
+
+### Tests
+
+**New synthetic tests** (`TestD15SyntheticModeration`, 5 tests):
+- `test_zeroing_preserves_columns` — moderated columns still present
+- `test_zeroed_columns_are_all_zero` — moderated column values are 0.0
+- `test_non_moderated_columns_unchanged` — other columns retain original values
+- `test_empty_moderation_no_change` — no-op when no moderation
+- `test_moderate_nonexistent_tid` — graceful handling of unknown tids
+
+**Enhanced real-data tests** (`TestD15ModerationHandling`, 2 tests):
+- `test_moderated_comments_zeroed_not_removed` — applies mod-out from Clojure blob, checks column count and zeroed values
+- `test_tids_include_moderated` — verifies moderated tids remain in rating_mat columns
+
+**Updated existing tests**:
+- `test_conversation.py::test_moderation` — updated to expect zeroed columns
+- `test_conversation.py::test_update_moderation` — same
+- `test_discrepancy_fixes.py::TestD2cVoteCountSource::test_n_cmts_includes_moderated_out_comments` — updated comment count assertion
+
+### Test results
+
+- Public datasets: **328 passed, 0 failed, 6 skipped, 56 xfailed**
+- Private datasets: 13 failures — all **pre-existing** (golden snapshot staleness from earlier fixes, not D15-related). Verified by running parent branch.
+
+### What's next
+
+- D12 (comment priorities) or D1/D1b (PCA sign flips) — per plan ordering
 
 ---
 
