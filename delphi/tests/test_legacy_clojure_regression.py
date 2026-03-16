@@ -342,7 +342,7 @@ class TestClojureRegression:
         check.is_true(result['overall_match'],
                      f"Clustering should match Clojure output (distribution + membership)")
 
-    @pytest.mark.xfail(raises=AssertionError, strict=True, reason="D12: Comment priorities not yet implemented in Python")
+    @pytest.mark.xfail(raises=AssertionError, strict=True, reason="D12: Priorities computed but values differ due to upstream clustering differences and Clojure group-votes lag (conversation.clj:640)")
     def test_comment_priorities(self, conversation_data):
         """
         Test that comment priorities match the Clojure implementation exactly.

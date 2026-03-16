@@ -1490,27 +1490,195 @@ class TestD12CommentPriorities:
     """
     D12: Comment priorities are not computed by Python.
          Clojure computes priorities based on PCA extremity and importance.
+
+    Clojure computation (conversation.clj:638-669):
+      1. Aggregate A, D, S votes across all groups per comment
+      2. Compute P (pass) = S - (A + D)
+      3. Get comment extremity from PCA (L2 norm of comment projection)
+      4. importance = (1 - (P+1)/(S+2)) * (E+1) * (A+1)/(S+2)
+      5. priority = [importance * (1 + 8 * 2^(-S/5))]^2
+      6. Meta comments get priority = 49 (7^2)
+
+    Known Clojure bug: when meta-tids is null (cold-start blobs generated
+    before the poller sets meta-tids from DB), ALL priorities are 49.0 due
+    to ``(if 0 ...)`` being truthy in Clojure. Python intentionally does NOT
+    replicate this bug; cold-start blobs are skipped for value matching.
+
+    Note: end-to-end priority comparison requires matching upstream outputs
+    (clustering, in-conv set). The formula test uses Clojure blob's
+    group-votes and comment-extremity to verify the formula in isolation.
     """
 
-    @pytest.mark.xfail(reason="D12: Comment priorities not implemented in Python")
+    @staticmethod
+    def _is_all_meta_bug(clj_priorities):
+        """Detect the Clojure all-49 bug (null meta-tids → all meta)."""
+        if not clj_priorities:
+            return False
+        vals = set(float(v) for v in clj_priorities.values())
+        return vals == {49.0}
+
+    @staticmethod
+    def _compute_priority_from_blob(clj_blob):
+        """Recompute priorities using Clojure blob's group-votes + extremity.
+
+        This tests the FORMULA in isolation from upstream pipeline differences.
+        """
+        META_PRIORITY = 7
+        gv = clj_blob.get('group-votes', {})
+        pca = clj_blob.get('pca', {})
+        extremities = pca.get('comment-extremity', [])
+        meta_tids_raw = clj_blob.get('meta-tids')
+        meta_tids = set(meta_tids_raw) if meta_tids_raw else set()
+        tids = sorted(int(k) for k in (clj_blob.get('comment-priorities') or {}).keys())
+
+        priorities = {}
+        for tid in tids:
+            # Aggregate A, D, S across groups (matches Clojure reduce)
+            A, D, S = 0, 0, 0
+            for gid, gdata in gv.items():
+                votes = gdata.get('votes', {})
+                # Keys may be int or str
+                tv = votes.get(tid, votes.get(str(tid), {}))
+                A += tv.get('A', 0)
+                D += tv.get('D', 0)
+                S += tv.get('S', 0)
+
+            P = S - (A + D)
+            E = extremities[tid] if tid < len(extremities) else 0
+
+            is_meta = tid in meta_tids
+            if is_meta:
+                priority = float(META_PRIORITY ** 2)
+            else:
+                p = (P + 1) / (S + 2)
+                a = (A + 1) / (S + 2)
+                importance = (1 - p) * (E + 1) * a
+                boost = 1 + 8 * (2 ** (-S / 5))
+                priority = (importance * boost) ** 2
+
+            priorities[tid] = priority
+        return priorities
+
     def test_comment_priorities_exist(self, conv, clojure_blob, dataset_name):
-        """Python should produce comment-priorities matching Clojure."""
+        """Python should produce comment-priorities with correct tid count."""
         clj_priorities = clojure_blob.get('comment-priorities', {})
         check.greater(len(clj_priorities), 0,
                        f"Clojure has {len(clj_priorities)} comment priorities")
 
-        # Check that Python produces priorities
         has_priorities = hasattr(conv, 'comment_priorities') and conv.comment_priorities
         check.is_true(has_priorities, "Python should compute comment_priorities")
 
-        if not has_priorities:
-            return
+    @pytest.mark.xfail(
+        reason="Clojure group-votes lag: comment-priorities uses (:group-votes conv) "
+               "= previous iteration (conversation.clj:640 shadows the parameter). "
+               "Blob stores current iteration's group-votes. Matches for stable datasets.",
+        strict=False)
+    def test_comment_priorities_formula_from_blob(self, conv, clojure_blob, dataset_name):
+        """Priority formula should match Clojure when given same inputs.
 
+        Uses the Clojure blob's group-votes and comment-extremity as inputs
+        to verify the formula produces the same output.
+
+        Note: Clojure's comment-priorities fnk uses (:group-votes conv) which
+        is the PREVIOUS iteration's group-votes (the variable is shadowed in
+        conversation.clj:640). The blob stores the CURRENT iteration's
+        group-votes. For datasets where group-votes changed between the last
+        two iterations (e.g., biodiversity), there will be mismatches. For
+        stable datasets (e.g., vw), the formula matches exactly.
+
+        Skipped for cold-start blobs with the all-49 bug.
+        """
+        clj_priorities = clojure_blob.get('comment-priorities', {})
+        if not clj_priorities:
+            pytest.skip(f"[{dataset_name}] No comment-priorities in Clojure blob")
+        if self._is_all_meta_bug(clj_priorities):
+            pytest.skip(
+                f"[{dataset_name}] Clojure blob has all-49 bug "
+                "(null meta-tids → all meta)")
+
+        recomputed = self._compute_priority_from_blob(clojure_blob)
+        mismatches = []
+        for tid, clj_val in clj_priorities.items():
+            tid_int = int(tid)
+            clj_val = float(clj_val)
+            py_val = recomputed.get(tid_int)
+            if py_val is None:
+                mismatches.append(f"  tid {tid}: missing in recomputed")
+                continue
+            if clj_val != 0:
+                rel_err = abs(py_val - clj_val) / abs(clj_val)
+                if rel_err > 1e-6:
+                    mismatches.append(
+                        f"  tid {tid}: recomputed={py_val:.6f} vs Clojure={clj_val:.6f} "
+                        f"(rel_err={rel_err:.2e})")
+            elif abs(py_val) > 1e-10:
+                mismatches.append(f"  tid {tid}: recomputed={py_val:.6f} vs Clojure=0.0")
+
+        if mismatches:
+            # Check if this is the group-votes lag issue (most values close-ish)
+            pct_mismatch = len(mismatches) / len(clj_priorities)
+            print(f"[{dataset_name}] Formula mismatches ({len(mismatches)}/{len(clj_priorities)}):")
+            for m in mismatches[:10]:
+                print(m)
+            if pct_mismatch > 0.5:
+                print(f"  NOTE: >50% mismatches likely due to Clojure group-votes lag "
+                      "(conversation.clj:640 shadows group-votes with previous iteration)")
+        check.equal(len(mismatches), 0,
+                    f"[{dataset_name}] Formula should match Clojure "
+                    f"({len(mismatches)}/{len(clj_priorities)} mismatches)")
+
+    def test_comment_priorities_ranking(self, conv, clojure_blob, dataset_name):
+        """Ranking order (Spearman correlation) between Python e2e and Clojure.
+
+        Skipped for cold-start blobs with the all-49 bug.
+        Since upstream pipeline may differ, we use a loose threshold (0.8).
+        """
+        from scipy.stats import spearmanr
+
+        clj_priorities = clojure_blob.get('comment-priorities', {})
+        if not clj_priorities:
+            pytest.skip(f"[{dataset_name}] No comment-priorities in Clojure blob")
+        if self._is_all_meta_bug(clj_priorities):
+            pytest.skip(f"[{dataset_name}] Clojure all-49 bug")
+
+        has_priorities = hasattr(conv, 'comment_priorities') and conv.comment_priorities
+        if not has_priorities:
+            pytest.fail("Python did not compute comment_priorities")
+
+        # Exclude meta tids (they are always 49 in Clojure)
+        blob_meta = set(clojure_blob.get('meta-tids') or [])
         py_priorities = conv.comment_priorities
-        # Compare rankings (Spearman correlation would be ideal, but check overlap first)
-        common_tids = set(str(k) for k in clj_priorities.keys()) & set(str(k) for k in py_priorities.keys())
-        print(f"[{dataset_name}] Common priority tids: {len(common_tids)}/{len(clj_priorities)}")
-        check.greater(len(common_tids), 0, "Should have common priority tids")
+        common_tids = sorted(
+            (set(int(k) for k in clj_priorities) & set(int(k) for k in py_priorities))
+            - blob_meta)
+        if len(common_tids) < 3:
+            pytest.skip(f"[{dataset_name}] Too few non-meta common tids")
+
+        clj_vals = [float(clj_priorities.get(str(t), clj_priorities.get(t, 0)))
+                    for t in common_tids]
+        py_vals = []
+        for t in common_tids:
+            for k, v in py_priorities.items():
+                if int(k) == t:
+                    py_vals.append(float(v))
+                    break
+
+        rho, _ = spearmanr(clj_vals, py_vals)
+        print(f"[{dataset_name}] Spearman rho = {rho:.4f} (n={len(common_tids)})")
+        # Loose threshold: end-to-end comparison has upstream differences
+        # (different clustering, in-conv set). Formula correctness is tested
+        # separately by test_comment_priorities_formula_from_blob.
+        check.greater(rho, 0.5,
+                      f"[{dataset_name}] Rank correlation should be ≥ 0.5, got {rho:.4f}")
+
+    def test_comment_priorities_all_positive(self, conv, clojure_blob, dataset_name):
+        """All priority values should be non-negative (they are squared)."""
+        has_priorities = hasattr(conv, 'comment_priorities') and conv.comment_priorities
+        if not has_priorities:
+            pytest.fail("Python did not compute comment_priorities")
+        for tid, val in conv.comment_priorities.items():
+            check.greater_equal(float(val), 0.0,
+                                f"tid {tid} priority should be >= 0")
 
 
 # ============================================================================

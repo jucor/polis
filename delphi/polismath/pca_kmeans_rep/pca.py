@@ -121,5 +121,43 @@ def pca_project_dataframe(df: pd.DataFrame,
         print(f"Error in projection computation: {e}")
         # Create fallback projections (all zeros)
         proj_dict = {pid: np.zeros(2) for pid in df.index}
-    
+
     return pca_results, proj_dict
+
+
+def pca_comment_extremity(pca_results: Dict[str, np.ndarray]) -> np.ndarray:
+    """
+    Compute comment extremity: the L2 norm of each comment's projection in PCA space.
+
+    Matches Clojure's ``with-proj-and-extremtiy`` (conversation.clj:338-349)
+    which calls ``pca-project-cmnts`` (pca.clj:167-178).
+
+    Clojure creates a virtual "vote vector" for each comment i: all nils except
+    -1 at position i. Projected through sparsity-aware projection, this gives::
+
+        proj[i] = sqrt(n_cols) * (-1 - center[i]) * comps[:, i]
+
+    Extremity is the Euclidean length of that projection vector.
+
+    Args:
+        pca_results: dict with 'center' (1D array, shape n_cols) and
+                     'comps' (2D array, shape n_comps × n_cols).
+
+    Returns:
+        1D array of shape (n_cols,) with the extremity for each comment.
+    """
+    center = pca_results['center']       # (n_cols,)
+    comps = pca_results['comps']         # (n_comps, n_cols)
+    n_cols = center.shape[0]
+
+    # (-1 - center[i]) for each comment
+    offset = -1.0 - center               # (n_cols,)
+
+    # Each comment's projection: offset[i] * comps[:, i], scaled by sqrt(n_cols)
+    # comps[:, i] is a column — shape (n_comps,) for each i
+    # proj shape: (n_cols, n_comps)
+    proj = offset[:, np.newaxis] * comps.T * np.sqrt(n_cols)
+
+    # Extremity = L2 norm of each row
+    extremity = np.linalg.norm(proj, axis=1)  # (n_cols,)
+    return extremity

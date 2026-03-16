@@ -925,6 +925,51 @@ them out (`matrix/set-column m' i 0`), preserving matrix structure.
 
 ---
 
+## Session: D12 — Comment Priorities (2026-03-16)
+
+### Branch: `jc/clj-parity-d12-comment-priorities`
+
+### What was done
+
+Implemented comment priorities computation matching Clojure (conversation.clj:638-669).
+
+**New code:**
+- `pca_comment_extremity()` in `pca.py` — computes L2 norm of each comment's projection in PCA space, matching Clojure's `pca-project-cmnts` (pca.clj:167-178). Creates a virtual "vote vector" for each comment (all nils except -1 at position i), projects through sparsity-aware projection.
+- `_compute_comment_priorities()` in `conversation.py` — full priority pipeline:
+  1. Compute comment extremity from PCA
+  2. Aggregate vote counts (A, D, S) across in-conv participants (matching Clojure's group-votes aggregation)
+  3. Compute importance = (1 - p) * (E + 1) * a where p = (P+1)/(S+2) and a = (A+1)/(S+2)
+  4. Apply new-comment boost: 1 + 8 * 2^(-S/5)
+  5. Square for deeper bias: priority = (importance * boost)^2
+  6. Meta (promoted) comments get priority = 49 (7^2)
+
+**Known Clojure bug documented:** When `meta-tids` is null (cold-start blobs), Clojure treats `(if 0 ...)` as truthy, making ALL priorities 49.0. Python intentionally does NOT replicate this bug. Cold-start blobs are skipped for value matching in tests.
+
+**Clojure group-votes lag:** The Clojure `comment-priorities` fnk (line 640) shadows the graph-computed `group-votes` with `(:group-votes conv)` — the PREVIOUS iteration's value. The blob stores the CURRENT iteration's value. For stable datasets (vw), these are identical and the formula matches exactly. For biodiversity (where groups change between iterations), there are mismatches. This is documented and the formula test is marked xfail with `strict=False`.
+
+### Tests
+
+**Enhanced D12 tests** (`TestD12CommentPriorities`, 4 tests × 2 datasets × 2 blob types):
+- `test_comment_priorities_exist` — verifies Python produces non-empty priorities
+- `test_comment_priorities_formula_from_blob` — recomputes priorities from Clojure blob's group-votes + extremity, verifies formula match (xfail strict=False for group-votes lag)
+- `test_comment_priorities_ranking` — Spearman rank correlation ≥ 0.5 between Python end-to-end and Clojure
+- `test_comment_priorities_all_positive` — all values non-negative (squared formula)
+
+**Updated legacy test:**
+- `test_comment_priorities` xfail reason updated to reflect that priorities ARE computed but values differ due to upstream clustering and group-votes lag
+
+### Test results
+
+- D12 targeted: **10 passed, 4 skipped, 1 xfailed, 1 xpassed** (vw formula matches exactly = xpass)
+- Full suite (public datasets): **338 passed, 0 failed, 10 skipped, 53 xfailed, 1 xpassed**
+- Golden snapshots re-recorded to include `comment_priorities` in output
+
+### What's next
+
+- D1/D1b (PCA sign flips) — the last remaining fix requiring replay infrastructure
+
+---
+
 ## Notes for Future Sessions
 
 - Private datasets are in `delphi/real_data/.local/` (separate git repo, linked via `link-to-polis-worktree.sh`)

@@ -15,7 +15,7 @@ import sys
 from datetime import datetime
 from natsort import natsorted
 
-from polismath.pca_kmeans_rep.pca import pca_project_dataframe
+from polismath.pca_kmeans_rep.pca import pca_project_dataframe, pca_comment_extremity
 from polismath.pca_kmeans_rep.clusters import (
     cluster_dataframe,
     kmeans_sklearn,
@@ -80,6 +80,7 @@ class Conversation:
         self.proj = {}
         self.repness = None
         self.consensus = []
+        self.comment_priorities = {}
         self.participant_info = {}
         self.vote_stats = {}
         self.group_votes = {}  # Initialize group_votes to avoid attribute errors
@@ -1007,10 +1008,13 @@ class Conversation:
         
         # Compute representativeness
         result._compute_repness()
-        
+
+        # Compute comment priorities (D12: matches Clojure conversation.clj)
+        result._compute_comment_priorities()
+
         # Compute participant info
         result._compute_participant_info()
-        
+
         return result
     
     def get_summary(self) -> Dict[str, Any]:
@@ -1258,7 +1262,95 @@ class Conversation:
             }
             
         return group_votes
-        
+
+    def _compute_comment_priorities(self) -> None:
+        """
+        Compute comment priorities matching Clojure (conversation.clj:638-669).
+
+        For each comment, the priority is computed from:
+          1. Aggregate vote counts (A=agree, D=disagree, S=seen) across all groups
+          2. P (pass/skip) = S - (A + D)
+          3. Comment extremity = L2 norm of PCA comment projection
+          4. importance = (1 - (P+1)/(S+2)) * (E+1) * (A+1)/(S+2)
+          5. priority = [importance * (1 + 8 * 2^(-S/5))]^2
+          6. Meta (promoted) comments get priority = 49 (7^2)
+
+        Clojure note: the comment-priorities fnk (line 640) shadows the
+        graph-computed ``group-votes`` with ``(:group-votes conv)`` — the
+        PREVIOUS iteration's value. For cold-start (single full-data update),
+        group-votes are stable across iterations so this is equivalent to
+        using the current value. We use the current value directly.
+
+        Sets ``self.comment_priorities`` to ``{tid: priority_float}``.
+        """
+        if not self.pca or not self.group_clusters:
+            self.comment_priorities = {}
+            return
+
+        tids = list(self.rating_mat.columns)
+        if not tids:
+            self.comment_priorities = {}
+            return
+
+        # --- Step 1: Comment extremity from PCA ---
+        extremity_array = pca_comment_extremity(self.pca)  # (n_cols,)
+        # Map tid -> extremity
+        extremities = {tid: float(extremity_array[i]) for i, tid in enumerate(tids)}
+
+        # --- Step 2: Aggregate vote counts from in-conv participants only ---
+        # Clojure aggregates A, D, S per-group (from group-votes built on
+        # base-cluster members) then sums across groups. This equals summing
+        # only over in-conv participants (those in base clusters), NOT all
+        # participants in the matrix.
+        in_conv_pids = set()
+        for bc in (self.base_clusters or []):
+            in_conv_pids.update(bc.get('members', []))
+
+        # Filter rating_mat to in-conv participants only
+        in_conv_in_mat = [pid for pid in self.rating_mat.index if pid in in_conv_pids]
+        if not in_conv_in_mat:
+            self.comment_priorities = {}
+            return
+        mat = self.rating_mat.loc[in_conv_in_mat].to_numpy(copy=False)
+
+        # Vote encoding: Python uses +1 = agree, -1 = disagree, NaN = unseen
+        not_nan = ~np.isnan(mat)
+        A_per_tid = np.nansum(mat > 0, axis=0).astype(float)   # agree
+        D_per_tid = np.nansum(mat < 0, axis=0).astype(float)   # disagree
+        S_per_tid = np.sum(not_nan, axis=0).astype(float)       # total seen
+
+        # --- Step 3: Compute priority for each tid ---
+        META_PRIORITY = 7
+        meta_tids = self.meta_tids  # set of promoted comment tids
+
+        priorities = {}
+        for i, tid in enumerate(tids):
+            A = A_per_tid[i]
+            D = D_per_tid[i]
+            S = S_per_tid[i]
+            P = S - (A + D)  # pass/skip votes
+            E = extremities.get(tid, 0.0)
+
+            is_meta = tid in meta_tids
+            if is_meta:
+                priority = float(META_PRIORITY ** 2)
+            else:
+                # importance_metric (conversation.clj:308-312)
+                p = (P + 1) / (S + 2)   # pass probability (Beta prior)
+                a = (A + 1) / (S + 2)   # agree probability (Beta prior)
+                importance = (1 - p) * (E + 1) * a
+
+                # New-comment boost: lets comments with few votes bubble up
+                new_comment_boost = 1 + 8 * (2 ** (-S / 5))
+
+                # priority_metric (conversation.clj:318-327): squared for deeper bias
+                priority = (importance * new_comment_boost) ** 2
+
+            priorities[tid] = priority
+
+        self.comment_priorities = priorities
+        logger.info(f"Computed comment priorities for {len(priorities)} comments")
+
     def _compute_user_vote_counts(self) -> Dict[str, int]:
         """
         Compute the number of votes per participant.
