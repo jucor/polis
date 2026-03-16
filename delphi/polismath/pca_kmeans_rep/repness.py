@@ -703,18 +703,89 @@ def compute_group_comment_stats_df(votes_long: pd.DataFrame,
     return stats_df
 
 
+def _passes_by_test_clojure(row: pd.Series) -> bool:
+    """
+    Check if a comment passes significance tests using Clojure's logic.
+
+    Clojure (repness.clj:162-167): accepts a comment if EITHER the agree metrics
+    OR the disagree metrics pass the z-test. This is an OR, not direction-specific:
+        (or (and (z-sig-90? rat) (z-sig-90? pat))
+            (and (z-sig-90? rdt) (z-sig-90? pdt)))
+
+    This differs from the old Python passes_by_test() which only checked the
+    selected direction and also required p >= 0.5.
+    """
+    return ((z_score_sig_90(row['pat']) and z_score_sig_90(row['rat'])) or
+            (z_score_sig_90(row['pdt']) and z_score_sig_90(row['rdt'])))
+
+
+def _beats_best_by_test(row: pd.Series, current_best_z: Optional[float]) -> bool:
+    """
+    Check if this comment has a higher z-score than the current best.
+
+    Clojure (repness.clj:130-136): fallback tracking so every group has at least
+    one representative, even if none pass the full significance filter.
+        (or (nil? current-best-z)
+            (> (max rat rdt) current-best-z))
+    """
+    if current_best_z is None:
+        return True
+    return max(row['rat'], row['rdt']) > current_best_z
+
+
+def _beats_best_agr(row: pd.Series, current_best: Optional[pd.Series]) -> bool:
+    """
+    Track the best agree comment, preferring comments the group agrees on.
+
+    Clojure (repness.clj:139-159): complex multi-condition logic:
+    1. Exclude unvoted comments (na==0 and nd==0)
+    2. If current-best has ra > 1.0: compare full repness metric (ra*rat*pa*pat)
+    3. If current-best exists: compare probability metric (pa*pat)
+    4. Otherwise: accept if pat > Z_90 or (ra > 1.0 and pa > 0.5)
+    """
+    na = row['na']
+    nd = row['nd']
+    ra = row['ra']
+    rat = row['rat']
+    pa = row['pa']
+    pat = row['pat']
+
+    # Exclude unvoted comments
+    if na == 0 and nd == 0:
+        return False
+
+    if current_best is not None:
+        if current_best['ra'] > 1.0:
+            # Compare full repness metric
+            return (ra * rat * pa * pat >
+                    current_best['ra'] * current_best['rat'] *
+                    current_best['pa'] * current_best['pat'])
+        else:
+            # Compare probability metric only
+            return pa * pat > current_best['pa'] * current_best['pat']
+
+    # No current best: accept if generally good
+    return (z_score_sig_90(pat) or (ra > 1.0 and pa > 0.5))
+
+
 def select_rep_comments_df(stats_df: pd.DataFrame,
-                           agree_count: int = 3,
-                           disagree_count: int = 2) -> pd.DataFrame:
+                           max_comments: int = 5) -> pd.DataFrame:
     """
     Select representative comments for a single group from a DataFrame.
 
-    DataFrame-native version of select_rep_comments().
+    Matches Clojure's select-rep-comments (repness.clj:209-278):
+    1. For each comment, check if it passes significance (either direction)
+    2. Track best-by-test fallback (max(rat, rdt))
+    3. Track best-agree comment (complex comparison)
+    4. If no sufficient comments: return best-agree or best fallback
+    5. Otherwise: sort sufficient by repness-metric, prepend best-agree, take 5,
+       then reorder with agrees before disagrees
 
     Args:
-        stats_df: DataFrame with comment statistics for ONE group
-        agree_count: Number of agreement comments to select
-        disagree_count: Number of disagreement comments to select
+        stats_df: DataFrame with comment statistics for ONE group.
+                  Must have columns: pat, rat, pdt, rdt, pa, pd, na, nd,
+                  ra, rd, agree_metric, disagree_metric, repful, comment
+        max_comments: Maximum comments to select (default 5, matching Clojure)
 
     Returns:
         DataFrame of selected representative comments
@@ -722,81 +793,81 @@ def select_rep_comments_df(stats_df: pd.DataFrame,
     if stats_df.empty:
         return stats_df
 
-    total_wanted = agree_count + disagree_count
+    # Phase 1: Classify each comment into sufficient / best / best-agree
+    sufficient_indices = []
+    best_idx = None
+    best_z = None
+    best_agr_idx = None
+    best_agr_row = None
 
-    # Best agree: pa > pd and passes significance tests
-    agree_candidates = stats_df[stats_df['pa'] > stats_df['pd']].copy()
-    if not agree_candidates.empty:
-        # Check significance: pat > Z_90 and rat > Z_90
-        passing_agree = agree_candidates[
-            (agree_candidates['pat'] > Z_90) &
-            (agree_candidates['rat'] > Z_90) &
-            (agree_candidates['pa'] >= 0.5)
-        ]
-        if not passing_agree.empty:
-            agree_candidates = passing_agree
+    for idx, row in stats_df.iterrows():
+        # Check if passes significance tests (Clojure OR logic)
+        if _passes_by_test_clojure(row):
+            sufficient_indices.append(idx)
 
-    # Best disagree: pd > pa and passes significance tests
-    disagree_candidates = stats_df[stats_df['pd'] > stats_df['pa']].copy()
-    if not disagree_candidates.empty:
-        passing_disagree = disagree_candidates[
-            (disagree_candidates['pdt'] > Z_90) &
-            (disagree_candidates['rdt'] > Z_90) &
-            (disagree_candidates['pd'] >= 0.5)
-        ]
-        if not passing_disagree.empty:
-            disagree_candidates = passing_disagree
+        # Track best-by-test (fallback), only if no sufficient comments yet
+        if not sufficient_indices:
+            if _beats_best_by_test(row, best_z):
+                best_idx = idx
+                # Clojure stores finalized repness-test: rat or rdt based on direction
+                best_z = max(row['rat'], row['rdt'])
 
-    # Sort candidates by metric
-    if not agree_candidates.empty:
-        agree_candidates = agree_candidates.sort_values('agree_metric', ascending=False)
-    if not disagree_candidates.empty:
-        disagree_candidates = disagree_candidates.sort_values('disagree_metric', ascending=False)
+        # Track best-agree (always, regardless of sufficient)
+        if _beats_best_agr(row, best_agr_row):
+            best_agr_idx = idx
+            best_agr_row = row
 
-    # Select top N from each category
-    selected_parts = []
+    # Phase 2: Build result
+    if not sufficient_indices:
+        # No comments passed significance — return best-agree or best fallback
+        if best_agr_idx is not None:
+            return stats_df.loc[[best_agr_idx]].copy()
+        elif best_idx is not None:
+            return stats_df.loc[[best_idx]].copy()
+        else:
+            return pd.DataFrame()
 
-    if not agree_candidates.empty:
-        top_agree = agree_candidates.head(agree_count).copy()
-        top_agree['repful'] = 'agree'
-        selected_parts.append(top_agree)
+    # Phase 3: Sufficient comments exist — sort and select
+    sufficient_df = stats_df.loc[sufficient_indices].copy()
 
-    if not disagree_candidates.empty:
-        top_disagree = disagree_candidates.head(disagree_count).copy()
-        top_disagree['repful'] = 'disagree'
-        selected_parts.append(top_disagree)
+    # Compute finalized repness metric for sorting
+    # Clojure's repness-metric operates on finalized stats:
+    # repness * repness-test * p-success * p-test
+    # For agree: ra * rat * pa * pat (= agree_metric)
+    # For disagree: rd * rdt * pd * pdt (= disagree_metric)
+    sufficient_df['_sort_metric'] = np.where(
+        sufficient_df['repful'] == 'agree',
+        sufficient_df['agree_metric'],
+        sufficient_df['disagree_metric']
+    )
 
-    if selected_parts:
-        selected = pd.concat(selected_parts, ignore_index=False)
-    else:
-        selected = pd.DataFrame()
+    # Remove best-agree from sufficient to avoid duplication
+    if best_agr_idx is not None and best_agr_idx in sufficient_df.index:
+        sufficient_df = sufficient_df.drop(best_agr_idx)
 
-    # If we couldn't find enough, try to fill from available candidates
-    # This matches the exact behavior of the old select_rep_comments() function:
-    # - First fallback adds agree_comments[agree_count:min(len, total_wanted)] regardless of
-    #   whether we exceed total_wanted (up to disagree_count more agrees)
-    # - Second fallback only runs if STILL < total_wanted
-    if len(selected) < total_wanted:
-        # Try to add more agree comments
-        # Old code: range(agree_count, min(len(agree_comments), agree_count + disagree_count))
-        if not agree_candidates.empty and len(agree_candidates) > agree_count:
-            extra_limit = min(len(agree_candidates), total_wanted)
-            extra_agrees = agree_candidates.iloc[agree_count:extra_limit].copy()
-            extra_agrees['repful'] = 'agree'
-            selected = pd.concat([selected, extra_agrees], ignore_index=False)
+    # Sort by repness metric descending
+    sufficient_df = sufficient_df.sort_values('_sort_metric', ascending=False)
 
-        # Try to add more disagree comments (only if still not enough)
-        # Old code: range(disagree_count, min(len(disagree_comments), agree_count + disagree_count))
-        if len(selected) < total_wanted and not disagree_candidates.empty and len(disagree_candidates) > disagree_count:
-            extra_limit = min(len(disagree_candidates), total_wanted)
-            extra_disagrees = disagree_candidates.iloc[disagree_count:extra_limit].copy()
-            extra_disagrees['repful'] = 'disagree'
-            selected = pd.concat([selected, extra_disagrees], ignore_index=False)
+    # Prepend best-agree at front (if exists)
+    if best_agr_idx is not None:
+        best_agr_df = stats_df.loc[[best_agr_idx]].copy()
+        best_agr_df['_sort_metric'] = np.where(
+            best_agr_df['repful'] == 'agree',
+            best_agr_df['agree_metric'],
+            best_agr_df['disagree_metric']
+        )
+        sufficient_df = pd.concat([best_agr_df, sufficient_df])
 
-    # Fallback: if still empty, take first row
-    if selected.empty and not stats_df.empty:
-        selected = stats_df.head(1).copy()
-        selected['repful'] = selected['repful'].iloc[0] if 'repful' in selected.columns else 'agree'
+    # Take top max_comments
+    selected = sufficient_df.head(max_comments)
+
+    # Reorder: agrees before disagrees (Clojure's agrees-before-disagrees)
+    agrees = selected[selected['repful'] == 'agree']
+    disagrees = selected[selected['repful'] != 'agree']
+    selected = pd.concat([agrees, disagrees])
+
+    # Drop helper column
+    selected = selected.drop(columns=['_sort_metric'], errors='ignore')
 
     return selected
 

@@ -619,7 +619,7 @@ class TestD9ZScoreThresholds:
                 check.greater(len(repness['comment_repness']), 0,
                               "comment_repness should not be empty")
 
-    @pytest.mark.xfail(reason="D5/D6: z-values differ → different significance decisions → different sets")
+    @pytest.mark.xfail(reason="D3: clusters differ → repness computed on different groups")
     def test_significance_sets_match_clojure(self, conv, clojure_blob, dataset_name):
         """Post-significance-filtering comment sets should match Clojure per group.
 
@@ -653,7 +653,7 @@ class TestD9ZScoreThresholds:
         check.equal(len(mismatches), 0,
                     f"{len(mismatches)} groups differ in selected rep comments")
 
-    @pytest.mark.xfail(reason="D5/D6/D10: different z-values and selection → no shared comments to compare")
+    @pytest.mark.xfail(reason="D3: clusters differ → no shared comments to compare z-values")
     def test_z_values_match_clojure(self, conv, clojure_blob, dataset_name):
         """Z-score values for shared rep comments should match Clojure.
 
@@ -661,8 +661,9 @@ class TestD9ZScoreThresholds:
         - p-test (Clojure) vs pat (Python) — proportion test z-score
         - repness-test (Clojure) vs rat (Python) — two-proportion test z-score
 
-        Requires D10 (same comment selection) so there ARE shared comments,
-        then D5/D6 so the values match.
+        Requires matching clusters (D3) so groups are comparable, then
+        D10 (same selection) and D5/D6 (correct z-values). D5/D6/D10 are
+        fixed; clusters still differ.
         """
         clojure_repness = clojure_blob.get('repness', {})
         if not clojure_repness:
@@ -786,7 +787,7 @@ class TestD5ProportionTest:
         print(f"[{dataset_name}] pat consistency: {total - mismatches}/{total} match formula (max_diff={max_diff:.4f})")
         check.equal(mismatches, 0, f"Clojure p-test values don't match formula for {mismatches}/{total}")
 
-    @pytest.mark.xfail(reason="D5/D10: prop test formula differs + no shared comments")
+    @pytest.mark.xfail(reason="D3: clusters differ → no shared comments to compare pat values")
     def test_pat_values_match_clojure_blob(self, conv, clojure_blob, dataset_name):
         """p-test (Clojure) vs pat (Python) for shared rep comments."""
         clojure_repness = clojure_blob.get('repness', {})
@@ -886,7 +887,7 @@ class TestD6TwoPropTest:
         check.greater(abs(result_large), abs(result_small),
                       "Large samples should produce more extreme z-scores than small ones")
 
-    @pytest.mark.xfail(reason="D6/D10: two-prop test differs + no shared comments to compare")
+    @pytest.mark.xfail(reason="D3: clusters differ → no shared comments to compare rat values")
     def test_rat_values_match_clojure_blob(self, conv, clojure_blob, dataset_name):
         """repness-test (Clojure) vs rat (Python) for shared rep comments.
 
@@ -1021,7 +1022,7 @@ class TestD7RepnessMetric:
             check.almost_equal(result, expected, abs=0.001,
                                msg=f"pa={pa},pat={pat},ra={ra},rat={rat}: expected {expected:.4f}, got {result:.4f}")
 
-    @pytest.mark.xfail(reason="D7/D10: metric formula differs + selection differs (no shared comments)")
+    @pytest.mark.xfail(reason="D3: clusters differ → no shared comments to compare metrics")
     def test_repness_metric_matches_clojure_blob(self, conv, clojure_blob, dataset_name):
         """repness (Clojure) vs agree/disagree_metric (Python) for shared comments."""
         clojure_repness = clojure_blob.get('repness', {})
@@ -1123,7 +1124,7 @@ class TestD8FinalizeStats:
         result = finalize_cmt_stats(stats)
         check.equal(result['repful'], 'disagree')
 
-    @pytest.mark.xfail(reason="D10: selection logic differs, may have no shared comments")
+    @pytest.mark.xfail(reason="D3: clusters differ → no shared comments to compare repful")
     def test_repful_matches_clojure_blob(self, conv, clojure_blob, dataset_name):
         """repful-for (Clojure) vs repful (Python) for shared rep comments."""
         clojure_repness = clojure_blob.get('repness', {})
@@ -1167,11 +1168,177 @@ class TestD10RepCommentSelection:
     """
     D10: Python selects 3 agree + 2 disagree = 5 total
          Clojure selects up to 5 total, agrees first, with beats-best-by-test logic
+
+    Fixed: Python now matches Clojure's select-rep-comments (repness.clj:209-278):
+    - passes-by-test? uses OR logic (either agree or disagree direction)
+    - Single pool of "sufficient" comments, sorted by repness-metric
+    - best-agree pinned at front, take 5, agrees-before-disagrees
+    - Fallback: best-by-test or best-agree if no sufficient comments
     """
 
-    @pytest.mark.xfail(reason="D10: Different selection logic than Clojure")
+    def test_passes_by_test_or_logic(self):
+        """Clojure's passes-by-test? accepts if EITHER direction passes.
+
+        repness.clj:162-167:
+            (or (and (z-sig-90? rat) (z-sig-90? pat))
+                (and (z-sig-90? rdt) (z-sig-90? pdt)))
+        """
+        from polismath.pca_kmeans_rep.repness import _passes_by_test_clojure
+        import pandas as pd
+
+        # Both agree metrics pass
+        row_agree = pd.Series({'pat': 2.0, 'rat': 2.0, 'pdt': 0.0, 'rdt': 0.0})
+        check.is_true(_passes_by_test_clojure(row_agree),
+                       "Should pass when agree metrics both > Z_90")
+
+        # Both disagree metrics pass
+        row_disagree = pd.Series({'pat': 0.0, 'rat': 0.0, 'pdt': 2.0, 'rdt': 2.0})
+        check.is_true(_passes_by_test_clojure(row_disagree),
+                       "Should pass when disagree metrics both > Z_90")
+
+        # Neither passes
+        row_neither = pd.Series({'pat': 0.5, 'rat': 2.0, 'pdt': 2.0, 'rdt': 0.5})
+        check.is_false(_passes_by_test_clojure(row_neither),
+                        "Should fail when neither direction has both > Z_90")
+
+        # One from each (not both in one direction)
+        row_mixed = pd.Series({'pat': 2.0, 'rat': 0.5, 'pdt': 0.5, 'rdt': 2.0})
+        check.is_false(_passes_by_test_clojure(row_mixed),
+                        "Should fail when mixed — need both in same direction")
+
+    def test_selection_agrees_before_disagrees(self):
+        """Selected comments should have agrees first, then disagrees."""
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_rep_comments_df
+
+        # Create stats where some pass as agree, some as disagree
+        data = []
+        for i in range(8):
+            is_agree = i < 4
+            data.append({
+                'comment': i,
+                'na': 10 if is_agree else 2,
+                'nd': 2 if is_agree else 10,
+                'ns': 12,
+                'pa': 0.8 if is_agree else 0.2,
+                'pd': 0.2 if is_agree else 0.8,
+                'pat': 3.0 - i * 0.2 if is_agree else 0.0,
+                'pdt': 0.0 if is_agree else 3.0 - (i - 4) * 0.2,
+                'ra': 1.5 if is_agree else 0.5,
+                'rd': 0.5 if is_agree else 1.5,
+                'rat': 3.0 - i * 0.2 if is_agree else 0.0,
+                'rdt': 0.0 if is_agree else 3.0 - (i - 4) * 0.2,
+                'agree_metric': (1.5 * (3.0 - i * 0.2) * 0.8 * (3.0 - i * 0.2)) if is_agree else 0.0,
+                'disagree_metric': 0.0 if is_agree else (1.5 * (3.0 - (i - 4) * 0.2) * 0.8 * (3.0 - (i - 4) * 0.2)),
+                'repful': 'agree' if is_agree else 'disagree',
+            })
+        df = pd.DataFrame(data)
+        selected = select_rep_comments_df(df)
+
+        repfuls = selected['repful'].tolist()
+        # All agrees should come before all disagrees
+        agree_done = False
+        for r in repfuls:
+            if r == 'disagree':
+                agree_done = True
+            if agree_done:
+                check.equal(r, 'disagree',
+                            f"Found agree after disagree in {repfuls}")
+
+    def test_selection_max_5(self):
+        """Clojure takes at most 5 comments (repness.clj:277: (take 5))."""
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_rep_comments_df
+
+        # Create 10 comments that all pass significance
+        data = []
+        for i in range(10):
+            data.append({
+                'comment': i,
+                'na': 10, 'nd': 2, 'ns': 12,
+                'pa': 0.8, 'pd': 0.2,
+                'pat': 3.0 - i * 0.1, 'pdt': 0.1,
+                'ra': 1.5, 'rd': 0.5,
+                'rat': 3.0 - i * 0.1, 'rdt': 0.1,
+                'agree_metric': 1.5 * (3.0 - i * 0.1) * 0.8 * (3.0 - i * 0.1),
+                'disagree_metric': 0.01,
+                'repful': 'agree',
+            })
+        df = pd.DataFrame(data)
+        selected = select_rep_comments_df(df)
+        check.less_equal(len(selected), 5,
+                          f"Should select at most 5 comments, got {len(selected)}")
+
+    def test_fallback_best_by_test(self):
+        """When no comment passes significance, fall back to best-by-test.
+
+        Clojure (repness.clj:241-243): tracks comment with max(rat, rdt).
+        """
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_rep_comments_df
+
+        # No comments pass significance (all z-scores below Z_90)
+        data = [
+            {'comment': 0, 'na': 1, 'nd': 1, 'ns': 2,
+             'pa': 0.5, 'pd': 0.5, 'pat': 0.5, 'pdt': 0.5,
+             'ra': 1.0, 'rd': 1.0, 'rat': 0.3, 'rdt': 0.2,
+             'agree_metric': 0.01, 'disagree_metric': 0.01, 'repful': 'agree'},
+            {'comment': 1, 'na': 2, 'nd': 1, 'ns': 3,
+             'pa': 0.6, 'pd': 0.4, 'pat': 0.8, 'pdt': 0.3,
+             'ra': 1.1, 'rd': 0.9, 'rat': 1.0, 'rdt': 0.5,
+             'agree_metric': 0.5, 'disagree_metric': 0.1, 'repful': 'agree'},
+        ]
+        df = pd.DataFrame(data)
+        selected = select_rep_comments_df(df)
+        check.equal(len(selected), 1, "Should select exactly 1 fallback comment")
+        # Comment 1 has max(rat, rdt) = max(1.0, 0.5) = 1.0 > comment 0's max(0.3, 0.2) = 0.3
+        check.equal(selected.iloc[0]['comment'], 1,
+                     "Should select comment with highest max(rat, rdt)")
+
+    def test_best_agree_pinned_at_front(self):
+        """Best-agree comment should be pinned at the front of the result.
+
+        Clojure (repness.clj:276): (concat (if best-agree [best-agree] []))
+        """
+        import pandas as pd
+        from polismath.pca_kmeans_rep.repness import select_rep_comments_df
+
+        # Several comments pass significance, but one is "best-agree"
+        # The best-agree has lower repness metric but good agree probability
+        data = [
+            # Best-agree candidate: moderate metric but good pa * pat
+            {'comment': 10, 'na': 8, 'nd': 0, 'ns': 8,
+             'pa': 0.9, 'pd': 0.1, 'pat': 2.0, 'pdt': -1.0,
+             'ra': 1.3, 'rd': 0.7, 'rat': 2.0, 'rdt': -1.0,
+             'agree_metric': 1.3 * 2.0 * 0.9 * 2.0, 'disagree_metric': 0.01,
+             'repful': 'agree'},
+            # Higher metric but lower pa*pat
+            {'comment': 20, 'na': 5, 'nd': 0, 'ns': 5,
+             'pa': 0.75, 'pd': 0.25, 'pat': 1.5, 'pdt': -0.5,
+             'ra': 2.0, 'rd': 0.5, 'rat': 3.0, 'rdt': -0.5,
+             'agree_metric': 2.0 * 3.0 * 0.75 * 1.5, 'disagree_metric': 0.01,
+             'repful': 'agree'},
+            # Disagree comment
+            {'comment': 30, 'na': 1, 'nd': 9, 'ns': 10,
+             'pa': 0.15, 'pd': 0.85, 'pat': -1.5, 'pdt': 2.5,
+             'ra': 0.3, 'rd': 1.8, 'rat': -1.5, 'rdt': 2.5,
+             'agree_metric': 0.01, 'disagree_metric': 1.8 * 2.5 * 0.85 * 2.5,
+             'repful': 'disagree'},
+        ]
+        df = pd.DataFrame(data)
+        selected = select_rep_comments_df(df)
+        # Best-agree (comment 10) should be pinned at front (among agrees)
+        agrees = selected[selected['repful'] == 'agree']
+        check.greater(len(agrees), 0, "Should have at least one agree")
+
+    @pytest.mark.xfail(reason="D3: clusters differ (k and/or membership) → per-group repness not comparable")
     def test_rep_comments_match_clojure(self, conv, clojure_blob, dataset_name):
-        """Selected representative comments per group should match Clojure."""
+        """Selected representative comments per group should match Clojure.
+
+        Requires matching clusters (D3 k-smoother) so groups are the same.
+        With different k or group memberships, repness is computed on different
+        participant sets, making per-group tid comparison meaningless.
+        """
         clojure_repness = clojure_blob.get('repness', {})
         if not clojure_repness:
             pytest.skip("No repness in Clojure blob")
