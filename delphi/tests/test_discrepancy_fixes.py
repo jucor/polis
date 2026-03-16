@@ -19,12 +19,15 @@ Discrepancies tested:
     D12 - Comment priorities
     D15 - Moderation handling
 
-Not tested here (deferred or tested elsewhere):
-    D1/D1b - PCA sign flips (needs replay infrastructure)
+Not tested here (deferred):
     D13    - Subgroup clustering (unused, deferred)
     D14    - Large conv optimization (deferred)
 
 Tested with synthetic data only (no Clojure blob comparison possible):
+    D1/D1b - PCA sign flip prevention (temporal stability feature)
+
+Tested with synthetic data only (no Clojure blob comparison possible):
+    D1/D1b - PCA sign flip prevention (temporal stability feature)
     D3     - K-smoother buffer (temporal stability feature)
 """
 
@@ -2369,3 +2372,288 @@ class TestD8BlobInjection:
         assert not mismatches, (
             f"[{dataset_name}] {len(mismatches)}/{total} repful mismatches:\n"
             + "\n".join(mismatches[:10]))
+
+
+# ============================================================================
+# D1 — PCA Sign Flip Prevention
+# ============================================================================
+
+class TestD1PcaSignFlipPrevention:
+    """
+    D1: Clojure uses power iteration with warm-starting from previous
+    components (conversation.clj:382, pca.clj:86-105), which naturally
+    maintains sign consistency across incremental updates.
+
+    Python uses sklearn SVD which can produce arbitrary eigenvector signs.
+    Without explicit sign alignment, components may flip between updates,
+    causing participants to jump to the opposite side of the visualization.
+
+    These are Python-only tests with synthetic data — no Clojure blob
+    comparison is possible because sign flips are a temporal phenomenon
+    that requires incremental updates.
+
+    Clojure reference:
+        - pca.clj:86-105 (powerit-pca: start-vectors parameter)
+        - conversation.clj:382 (passes previous comps as start-vectors)
+    """
+
+    @staticmethod
+    def _make_votes(n_participants=30, n_comments=10, seed=42):
+        """Create synthetic vote data for testing."""
+        rng = np.random.RandomState(seed)
+        vote_list = []
+        for pid in range(n_participants):
+            for tid in range(n_comments):
+                if rng.random() < 0.7:
+                    vote_list.append({
+                        'pid': pid,
+                        'tid': tid,
+                        'vote': int(rng.choice([-1, 1])),
+                    })
+        return {'votes': vote_list, 'lastVoteTimestamp': 1000}
+
+    @staticmethod
+    def _make_polarized_votes(n_per_group=15, n_comments=10, seed=42):
+        """Create votes with clear two-group structure (for predictable PCA).
+
+        Group A (pids 0..n_per_group-1): mostly agree on first half, disagree on second.
+        Group B (pids n_per_group..2*n_per_group-1): opposite pattern.
+        """
+        rng = np.random.RandomState(seed)
+        vote_list = []
+        for pid in range(2 * n_per_group):
+            is_group_b = pid >= n_per_group
+            for tid in range(n_comments):
+                if rng.random() < 0.8:  # 80% vote rate
+                    first_half = tid < n_comments // 2
+                    # Group A: agree on first half, disagree on second
+                    # Group B: opposite
+                    base_vote = 1 if first_half else -1
+                    if is_group_b:
+                        base_vote = -base_vote
+                    # Add some noise (10% flip)
+                    if rng.random() < 0.1:
+                        base_vote = -base_vote
+                    vote_list.append({
+                        'pid': pid,
+                        'tid': tid,
+                        'vote': base_vote,
+                    })
+        return {'votes': vote_list, 'lastVoteTimestamp': 1000}
+
+    def test_align_pca_signs_function_exists(self):
+        """The align_pca_signs function should exist in pca.py."""
+        from polismath.pca_kmeans_rep.pca import align_pca_signs
+        assert callable(align_pca_signs)
+
+    def test_align_flips_negated_components(self):
+        """If new components are exactly negated, align should flip them back."""
+        from polismath.pca_kmeans_rep.pca import align_pca_signs
+
+        old_comps = np.array([
+            [0.5, 0.5, -0.5, -0.5],
+            [0.5, -0.5, 0.5, -0.5],
+        ])
+        # Negate both components
+        new_comps = -old_comps.copy()
+
+        aligned = align_pca_signs(new_comps, old_comps)
+
+        # After alignment, should match old_comps (signs restored)
+        np.testing.assert_array_almost_equal(aligned, old_comps,
+            err_msg="Negated components should be flipped back to match old")
+
+    def test_align_preserves_already_aligned(self):
+        """If new components already have correct signs, leave them unchanged."""
+        from polismath.pca_kmeans_rep.pca import align_pca_signs
+
+        old_comps = np.array([
+            [0.5, 0.5, -0.5, -0.5],
+            [0.5, -0.5, 0.5, -0.5],
+        ])
+        new_comps = old_comps.copy() * 1.01  # Slightly different magnitude, same sign
+
+        aligned = align_pca_signs(new_comps, old_comps)
+
+        np.testing.assert_array_almost_equal(aligned, new_comps,
+            err_msg="Already-aligned components should not be changed")
+
+    def test_align_handles_mixed_flips(self):
+        """One component flipped, one not — only the flipped one should change."""
+        from polismath.pca_kmeans_rep.pca import align_pca_signs
+
+        old_comps = np.array([
+            [0.5, 0.5, -0.5, -0.5],
+            [0.5, -0.5, 0.5, -0.5],
+        ])
+        new_comps = np.array([
+            [-0.5, -0.5, 0.5, 0.5],   # Flipped
+            [0.5, -0.5, 0.5, -0.5],     # Not flipped
+        ])
+
+        aligned = align_pca_signs(new_comps, old_comps)
+
+        # First component should be flipped back, second unchanged
+        np.testing.assert_array_almost_equal(aligned[0], old_comps[0])
+        np.testing.assert_array_almost_equal(aligned[1], new_comps[1])
+
+    def test_align_handles_dimension_mismatch(self):
+        """When new components have more columns (new comments added), align works."""
+        from polismath.pca_kmeans_rep.pca import align_pca_signs
+
+        old_comps = np.array([
+            [0.5, 0.5, -0.5],
+            [0.5, -0.5, 0.5],
+        ])
+        # New data has 5 columns (2 new comments added)
+        new_comps = np.array([
+            [-0.4, -0.4, 0.4, 0.1, 0.2],   # Flipped relative to first 3 cols
+            [0.4, -0.4, 0.4, 0.3, -0.1],    # Not flipped
+        ])
+
+        aligned = align_pca_signs(new_comps, old_comps)
+
+        # First component: dot of old and new[:3] is negative → should flip
+        dot0 = np.dot(old_comps[0], new_comps[0, :3])
+        assert dot0 < 0, "Test setup: first component should be flipped"
+        # After alignment, first 3 cols should have same sign direction as old
+        assert np.dot(old_comps[0], aligned[0, :3]) > 0, \
+            "First component should be flipped to match old direction"
+
+        # Second component: dot of old and new[:3] is positive → no flip
+        dot1 = np.dot(old_comps[1], new_comps[1, :3])
+        assert dot1 > 0, "Test setup: second component should not be flipped"
+        np.testing.assert_array_almost_equal(aligned[1], new_comps[1])
+
+    def test_align_returns_copy_not_mutation(self):
+        """align_pca_signs should not mutate the input array."""
+        from polismath.pca_kmeans_rep.pca import align_pca_signs
+
+        old = np.array([[1.0, 0.0], [0.0, 1.0]])
+        new = np.array([[-1.0, 0.0], [0.0, -1.0]])
+        new_orig = new.copy()
+
+        aligned = align_pca_signs(new, old)
+
+        np.testing.assert_array_equal(new, new_orig,
+            err_msg="align_pca_signs should not mutate the input")
+
+    def test_align_with_none_prev_is_noop(self):
+        """When prev_comps is None (first run), return new components unchanged."""
+        from polismath.pca_kmeans_rep.pca import align_pca_signs
+
+        new = np.array([[0.5, -0.5], [-0.5, 0.5]])
+        aligned = align_pca_signs(new, None)
+
+        np.testing.assert_array_equal(aligned, new)
+
+    def test_projections_consistent_across_updates(self):
+        """
+        Integration test: projections for existing participants should not
+        suddenly jump to the opposite side when new votes are added.
+
+        This is the key user-facing behavior: participants' positions on the
+        visualization should move smoothly, not flip across the origin.
+        """
+        # Batch 1: establish initial PCA
+        votes1 = self._make_polarized_votes(n_per_group=15, n_comments=10, seed=42)
+        conv = Conversation(conversation_id="test_d1_integration")
+        conv = conv.update_votes(votes1)
+        conv = conv.recompute()
+
+        proj_before = dict(conv.proj)  # Copy projections
+
+        # Batch 2: add more participants with same structure (should not flip PCA)
+        rng = np.random.RandomState(99)
+        extra_votes = []
+        for pid in range(30, 40):  # 10 new participants
+            is_group_b = pid >= 35
+            for tid in range(10):
+                if rng.random() < 0.8:
+                    first_half = tid < 5
+                    base_vote = 1 if first_half else -1
+                    if is_group_b:
+                        base_vote = -base_vote
+                    if rng.random() < 0.1:
+                        base_vote = -base_vote
+                    extra_votes.append({'pid': pid, 'tid': tid, 'vote': base_vote})
+
+        # Also add some new comments (11, 12) to test dimension expansion
+        for pid in range(30):
+            for tid in [10, 11]:
+                if rng.random() < 0.5:
+                    extra_votes.append({'pid': pid, 'tid': tid, 'vote': int(rng.choice([-1, 1]))})
+
+        conv = conv.update_votes({'votes': extra_votes, 'lastVoteTimestamp': 2000})
+        conv = conv.recompute()
+
+        proj_after = conv.proj
+
+        # For participants that existed in both batches, check that projections
+        # haven't flipped sign (i.e., they're in the same quadrant or moved smoothly).
+        # We check this by verifying the dot product of before/after projections
+        # is positive for the majority of participants.
+        n_consistent = 0
+        n_total = 0
+        for pid in proj_before:
+            if pid in proj_after:
+                before = np.array(proj_before[pid])
+                after = np.array(proj_after[pid])
+                if np.linalg.norm(before) > 0.01 and np.linalg.norm(after) > 0.01:
+                    # Dot product > 0 means same general direction
+                    dot = np.dot(before, after)
+                    if dot > 0:
+                        n_consistent += 1
+                    n_total += 1
+
+        consistency_ratio = n_consistent / max(n_total, 1)
+        assert consistency_ratio >= 0.85, \
+            f"Projection consistency too low: {consistency_ratio:.0%} of participants " \
+            f"maintained direction ({n_consistent}/{n_total}). " \
+            f"Sign flips are causing participants to jump across the origin."
+
+    def test_pca_project_dataframe_accepts_prev_comps(self):
+        """pca_project_dataframe should accept prev_comps parameter for sign alignment."""
+        from polismath.pca_kmeans_rep.pca import pca_project_dataframe
+
+        import inspect
+        sig = inspect.signature(pca_project_dataframe)
+        assert 'prev_comps' in sig.parameters, \
+            "pca_project_dataframe should accept a prev_comps parameter"
+
+    def test_conversation_passes_prev_comps(self):
+        """
+        After initial PCA, subsequent recomputes should pass previous
+        components to pca_project_dataframe for sign alignment.
+        """
+        votes = self._make_polarized_votes(n_per_group=15, n_comments=10, seed=42)
+        conv = Conversation(conversation_id="test_d1_prev")
+        conv = conv.update_votes(votes)
+        conv = conv.recompute()
+
+        # Store PCA comps after first computation
+        first_comps = conv.pca['comps'].copy()
+
+        # Add more votes and recompute
+        extra_votes = []
+        rng = np.random.RandomState(123)
+        for pid in range(30, 35):
+            for tid in range(10):
+                if rng.random() < 0.7:
+                    extra_votes.append({'pid': pid, 'tid': tid, 'vote': int(rng.choice([-1, 1]))})
+
+        conv = conv.update_votes({'votes': extra_votes, 'lastVoteTimestamp': 2000})
+        conv = conv.recompute()
+
+        second_comps = conv.pca['comps']
+
+        # The components should have consistent signs with the first computation.
+        # Check via dot product: each component pair should have positive dot product
+        # (after truncating to shared dimension).
+        n_cols = min(first_comps.shape[1], second_comps.shape[1])
+        for i in range(min(2, first_comps.shape[0], second_comps.shape[0])):
+            dot = np.dot(first_comps[i, :n_cols], second_comps[i, :n_cols])
+            assert dot > 0, \
+                f"PC{i+1} sign flipped between updates (dot={dot:.4f}). " \
+                f"Conversation._compute_pca should pass prev_comps for alignment."
+

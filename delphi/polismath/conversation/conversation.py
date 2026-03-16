@@ -513,7 +513,15 @@ class Conversation:
             # Make a clean copy of the rating matrix
             clean_matrix = self._get_clean_matrix()
 
-            pca_results, proj_dict = pca_project_dataframe(clean_matrix, n_components)
+            # Pass previous components for sign alignment (D1 fix).
+            # Clojure warm-starts power iteration from previous eigenvectors
+            # (conversation.clj:382); we achieve the same by post-hoc sign
+            # alignment.  On the first run self.pca is None so prev_comps
+            # is None, which is a no-op.
+            prev_comps = self.pca['comps'] if self.pca else None
+
+            pca_results, proj_dict = pca_project_dataframe(
+                clean_matrix, n_components, prev_comps=prev_comps)
 
             # Store results
             self.pca = pca_results

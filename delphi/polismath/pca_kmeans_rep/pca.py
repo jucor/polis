@@ -12,8 +12,48 @@ from typing import Dict, List, Optional, Tuple, Union, Any
 
 logger = logging.getLogger(__name__)
 
+
+def align_pca_signs(
+    new_comps: np.ndarray,
+    prev_comps: Optional[np.ndarray],
+) -> np.ndarray:
+    """
+    Align the signs of new PCA components to match the direction of previous components.
+
+    SVD-based PCA (sklearn) produces eigenvectors with arbitrary signs — the
+    sign can flip between runs when the data changes slightly.  Clojure avoids
+    this by using power iteration warm-started from the previous components
+    (pca.clj:86-105, conversation.clj:382).  We achieve the same effect as a
+    post-processing step: for each component, if ``dot(new, old) < 0``, negate
+    the new component so it points in the same direction as the old one.
+
+    Args:
+        new_comps: New principal components, shape (n_comps, n_cols_new).
+        prev_comps: Previous principal components, shape (n_comps, n_cols_old),
+            or None on the first run (returns new_comps unchanged).
+
+    Returns:
+        Copy of new_comps with signs aligned to prev_comps.
+    """
+    if prev_comps is None:
+        return new_comps
+
+    aligned = new_comps.copy()
+    n_shared_cols = min(new_comps.shape[1], prev_comps.shape[1])
+    n_shared_comps = min(new_comps.shape[0], prev_comps.shape[0])
+
+    for i in range(n_shared_comps):
+        dot = np.dot(new_comps[i, :n_shared_cols], prev_comps[i, :n_shared_cols])
+        if dot < 0:
+            aligned[i] = -aligned[i]
+
+    return aligned
+
+
 def pca_project_dataframe(df: pd.DataFrame,
-                         n_comps: int = 2) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+                         n_comps: int = 2,
+                         prev_comps: Optional[np.ndarray] = None,
+                         ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """
     Perform PCA on a DataFrame and project participants into PCA space.
 
@@ -26,6 +66,11 @@ def pca_project_dataframe(df: pd.DataFrame,
         df: DataFrame with participants as rows and comments as columns.
             Values are votes (float); NaN indicates missing/unseen.
         n_comps: Number of principal components to compute.
+        prev_comps: Previous PCA components for sign alignment, or None
+            on the first run.  When provided, the signs of the new
+            components are aligned to match the previous ones, preventing
+            sign flips that would cause participants to jump across the
+            visualization.  See :func:`align_pca_signs`.
 
     Returns:
         Tuple of (pca_results, proj_dict) where:
@@ -90,9 +135,23 @@ def pca_project_dataframe(df: pd.DataFrame,
         projections = pca.fit_transform(matrix_data_no_nan)
         projections = np.ascontiguousarray(projections)
 
+        comps = pca.components_
+
+        # Align signs with previous components to prevent sign flips.
+        # Clojure achieves this implicitly via power-iteration warm-starting
+        # (pca.clj:86-105); we do it as explicit post-processing.
+        if prev_comps is not None:
+            aligned_comps = align_pca_signs(comps, prev_comps)
+            # If any component was flipped, the corresponding projection
+            # column must also be negated to stay consistent.
+            for i in range(min(comps.shape[0], aligned_comps.shape[0])):
+                if not np.array_equal(comps[i], aligned_comps[i]):
+                    projections[:, i] = -projections[:, i]
+            comps = aligned_comps
+
         pca_results = {
             'center': pca.mean_,
-            'comps': pca.components_
+            'comps': comps
         }
 
     except Exception as e:

@@ -454,8 +454,8 @@ See `delphi/docs/HANDOFF_K_DIVERGENCE_INVESTIGATION.md` for detailed context.
 
 | ID | Discrepancy | Plan PR | GitHub PR | Status |
 |----|-------------|---------|-----------|--------|
-| D1 | PCA sign flips | PR 13 | — | Fix (sign consistency) |
-| D1b | Projection input | PR 13 | — | Fix with D1 |
+| D1 | PCA sign flips | PR 13 | — | **DONE** ✓ |
+| D1b | Projection input | PR 13 | — | **DONE** ✓ (documented, low severity, no code change) |
 | D2 | In-conv threshold | **PR 1** | **#2421** | **DONE** ✓ |
 | D2b | Base-cluster sort order | **PR 1** | **#2421** | **DONE** ✓ |
 | D2c | Vote count source (raw vs filtered matrix) | **PR 1** | **#2421** | **DONE** ✓ |

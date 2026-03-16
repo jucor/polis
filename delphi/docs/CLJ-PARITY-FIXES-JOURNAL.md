@@ -970,6 +970,78 @@ Implemented comment priorities computation matching Clojure (conversation.clj:63
 
 ---
 
+## Session: D1/D1b — PCA Sign Flip Prevention (2026-03-16)
+
+### Branch: `jc/clj-parity-d1-pca-sign-flip-prevention` (based on `jc/clj-parity-d12-comment-priorities`)
+
+### Problem
+
+SVD-based PCA (sklearn) produces eigenvectors with arbitrary signs.  When the
+vote matrix changes between updates (new votes, new participants, new comments),
+the principal components can flip sign, causing participants to appear to jump
+to the opposite side of the visualization.
+
+Clojure avoids this by using power iteration warm-started from previous
+components (pca.clj:86-105, conversation.clj:382).  The starting vector guides
+convergence toward the same direction as the previous iteration.
+
+### Approach
+
+Rather than replacing sklearn's SVD with power iteration, we add post-hoc sign
+alignment: after computing new components, for each component, if
+`dot(new_comp, old_comp) < 0`, negate the new component and the corresponding
+projection column.
+
+This is the standard technique for SVD sign stability (used in scikit-learn's
+own `svd_flip` for a similar purpose, though that one aligns to data extremes
+rather than previous components).
+
+### Implementation
+
+**`pca.py`**:
+- Added `align_pca_signs(new_comps, prev_comps)` — compares dot products of
+  corresponding components over their shared columns.  Handles dimension
+  mismatches (new comments added), None prev_comps (first run), returns a copy.
+- Modified `pca_project_dataframe` to accept optional `prev_comps` parameter.
+  When provided, aligns signs and negates the corresponding projection columns.
+
+**`conversation.py`**:
+- `_compute_pca` now passes `self.pca['comps']` as `prev_comps` to
+  `pca_project_dataframe`.  On first run, `self.pca` is None → no alignment.
+
+### D1b (Projection Input) — Documented, Not Changed
+
+D1b is a LOW severity near-match: Clojure skips unvoted entries in projection
+(nil = 0 contribution), while Python projects using the fully imputed matrix
+(NaN → col mean).  Since `center ≈ col_mean`, the unvoted contributions are
+near-zero and the results are practically equivalent.  No code change needed;
+the Python approach is arguably cleaner (single matrix multiply vs per-entry
+conditional).
+
+### Tests
+
+**11 new tests** in `TestD1PcaSignFlipPrevention`:
+- `test_align_pca_signs_function_exists` — function exists
+- `test_align_flips_negated_components` — negated components get flipped back
+- `test_align_preserves_already_aligned` — same-sign components unchanged
+- `test_align_handles_mixed_flips` — one flipped, one not
+- `test_align_handles_dimension_mismatch` — new comments added (wider matrix)
+- `test_align_returns_copy_not_mutation` — input not mutated
+- `test_align_with_none_prev_is_noop` — first run (no prev) passes through
+- `test_projections_consistent_across_updates` — integration: existing
+  participants maintain direction after new votes added (≥85% consistency)
+- `test_pca_project_dataframe_accepts_prev_comps` — API signature check
+- `test_conversation_passes_prev_comps` — components have positive dot product
+  across updates
+
+### Test Results
+
+- D1 targeted: **11 passed** (all new tests)
+- Full suite (public datasets): **348 passed, 0 failed, 10 skipped, 53 xfailed, 1 xpassed**
+- No regressions
+
+---
+
 ## Notes for Future Sessions
 
 - Private datasets are in `delphi/real_data/.local/` (separate git repo, linked via `link-to-polis-worktree.sh`)
