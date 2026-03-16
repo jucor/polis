@@ -789,11 +789,35 @@ Tests affected (now xfailed for D3 instead of D10):
 - Re-recorded golden snapshots for vw and biodiversity
 - Final: 315 passed, 0 failed, 3 skipped, 56 xfailed
 
+### Session 13 (2026-03-16)
+
+- Branch `jc/clj-parity-d3-k-smoother-buffer` on top of `jc/clj-parity-d11-consensus-comment-selection`
+- **D3: K-smoother buffer** — Clojure requires the silhouette-best k to be stable for 4
+  consecutive updates before `smoothed_k` switches. Without this, groups flicker as votes
+  arrive incrementally.
+- **Implementation**: Added `group_k_smoother` state dict to `Conversation.__init__()` with
+  `last_k`, `last_k_count`, `smoothed_k`. In `_compute_clusters()`, after silhouette-best k
+  is found, the smoother logic runs: increment counter if same k, reset to 1 if different,
+  switch `smoothed_k` only when counter reaches GROUP_K_BUFFER (4). On cold start (no history),
+  first k is accepted immediately. Matches conversation.clj:449-468.
+- **Tests**: 7 new tests in `TestD3KSmootherBuffer` (all synthetic — no Clojure blob comparison
+  possible for temporal features):
+  - `test_smoother_state_exists_on_conversation`
+  - `test_cold_start_accepts_first_k`
+  - `test_smoother_holds_k_when_flickering`
+  - `test_smoother_switches_after_buffer_consecutive`
+  - `test_smoother_count_resets_on_change`
+  - `test_smoother_preserves_state_across_updates`
+  - `test_cold_start_same_results_as_without_smoother`
+- **TDD cycle**: RED confirmed (6 AttributeError failures), then GREEN (all 7 pass)
+- **Full suite**: 322 passed, 3 skipped, 56 xfailed — no regressions (without --include-local)
+- **With --include-local**: 128 passed, 5 skipped, 120 xfailed, 2 xpassed, 3 failed
+  (all 3 pre-existing: pakistan-incremental D2 issue, 2 FLI regression tests)
+
 ### What's Next
 
-1. **D3 (k-smoother buffer)**: Temporal stability for cluster count.
-2. **D12 (Comment priorities)**: Implement from scratch.
-3. **D15 (Moderation handling)**: Clojure zeros vs Python removes.
+1. **D12 (Comment priorities)**: Implement from scratch.
+2. **D15 (Moderation handling)**: Clojure zeros vs Python removes.
 
 ---
 

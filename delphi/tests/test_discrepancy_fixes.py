@@ -21,9 +21,11 @@ Discrepancies tested:
 
 Not tested here (deferred or tested elsewhere):
     D1/D1b - PCA sign flips (needs replay infrastructure)
-    D3     - K-smoother buffer (needs replay infrastructure)
     D13    - Subgroup clustering (unused, deferred)
     D14    - Large conv optimization (deferred)
+
+Tested with synthetic data only (no Clojure blob comparison possible):
+    D3     - K-smoother buffer (temporal stability feature)
 """
 
 import json
@@ -1779,6 +1781,182 @@ class TestD11SyntheticConsensus:
         agree_tids = [e['tid'] for e in result['agree']]
         # Comment 0 has higher pa and pat → should come first
         assert agree_tids[0] == 0, f"Comment 0 should rank first, got {agree_tids}"
+
+
+# ============================================================================
+# D3 — K-Smoother Buffer (temporal stability)
+# ============================================================================
+
+
+class TestD3KSmootherBuffer:
+    """
+    D3: Clojure requires k to be best for 4 consecutive updates before
+    switching. Without this, groups flicker as votes arrive incrementally.
+
+    These are Python-only tests with synthetic data — no Clojure blob
+    comparison is possible because cold-start blobs are single-shot.
+
+    Clojure reference: conversation.clj:449-468 (group-k-smoother)
+    """
+
+    def test_smoother_state_exists_on_conversation(self):
+        """Conversation should have group_k_smoother state after clustering."""
+        conv = Conversation(conversation_id="test_d3")
+        # Build enough data for clustering
+        votes = self._make_votes(n_participants=30, n_comments=10)
+        conv = conv.update_votes(votes)
+        assert hasattr(conv, 'group_k_smoother'), \
+            "Conversation should have group_k_smoother attribute after update"
+        smoother = conv.group_k_smoother
+        assert 'last_k' in smoother, "Smoother should track last_k"
+        assert 'last_k_count' in smoother, "Smoother should track last_k_count"
+        assert 'smoothed_k' in smoother, "Smoother should track smoothed_k"
+
+    def test_cold_start_accepts_first_k(self):
+        """On first update, smoother should accept whatever k is best."""
+        conv = Conversation(conversation_id="test_d3_cold")
+        votes = self._make_votes(n_participants=30, n_comments=10)
+        conv = conv.update_votes(votes)
+
+        smoother = conv.group_k_smoother
+        # First update: smoothed_k == last_k (no history to disagree with)
+        assert smoother['smoothed_k'] == smoother['last_k'], \
+            f"Cold start: smoothed_k ({smoother['smoothed_k']}) should equal last_k ({smoother['last_k']})"
+        assert smoother['last_k_count'] == 1, \
+            f"Cold start: last_k_count should be 1, got {smoother['last_k_count']}"
+
+    def test_smoother_holds_k_when_flickering(self):
+        """
+        If best-k alternates between values, smoother should hold the
+        original k because neither new value reaches the buffer threshold (4).
+        """
+        conv = Conversation(conversation_id="test_d3_flicker")
+
+        # First update — establishes initial k
+        votes1 = self._make_votes(n_participants=30, n_comments=10, seed=42)
+        conv = conv.update_votes(votes1)
+        initial_k = conv.group_k_smoother['smoothed_k']
+
+        # Do 3 more updates with slightly different data
+        # The smoother should keep the same smoothed_k unless best_k
+        # is the same for 4 consecutive updates
+        smoothed_ks = [initial_k]
+        for i in range(3):
+            votes_next = self._make_votes(
+                n_participants=30 + i, n_comments=10, seed=100 + i)
+            conv = conv.update_votes(votes_next)
+            smoothed_ks.append(conv.group_k_smoother['smoothed_k'])
+
+        # The smoother should NOT change smoothed_k unless the same best_k
+        # was seen buffer (4) times in a row
+        smoother = conv.group_k_smoother
+        if smoother['last_k_count'] < 4:
+            # If best_k hasn't stabilized, smoothed_k should still be the initial value
+            assert smoother['smoothed_k'] == initial_k, \
+                f"Smoother should hold initial k={initial_k}, got {smoother['smoothed_k']} " \
+                f"(last_k_count={smoother['last_k_count']})"
+
+    def test_smoother_switches_after_buffer_consecutive(self):
+        """
+        After the same best-k is seen buffer (4) times consecutively,
+        the smoother should switch smoothed_k to that value.
+        """
+        conv = Conversation(conversation_id="test_d3_switch")
+
+        # Use consistent data so best_k is the same every time
+        votes = self._make_votes(n_participants=30, n_comments=10, seed=42)
+        for i in range(5):
+            conv = conv.update_votes(votes)
+
+        smoother = conv.group_k_smoother
+        # After 5 identical updates, last_k_count >= 4, so smoothed_k == last_k
+        assert smoother['last_k_count'] >= 4, \
+            f"After 5 identical updates, last_k_count should be >= 4, got {smoother['last_k_count']}"
+        assert smoother['smoothed_k'] == smoother['last_k'], \
+            f"After buffer reached, smoothed_k ({smoother['smoothed_k']}) should equal last_k ({smoother['last_k']})"
+
+    def test_smoother_count_resets_on_change(self):
+        """
+        When best-k changes, the counter resets to 1.
+        """
+        conv = Conversation(conversation_id="test_d3_reset")
+
+        # First update
+        votes1 = self._make_votes(n_participants=30, n_comments=10, seed=42)
+        conv = conv.update_votes(votes1)
+        first_k = conv.group_k_smoother['last_k']
+
+        # Second update with same data — count should go to 2
+        conv = conv.update_votes(votes1)
+        assert conv.group_k_smoother['last_k_count'] == 2
+
+        # Now feed very different data to try to change best_k
+        votes_different = self._make_votes(
+            n_participants=100, n_comments=20, seed=999)
+        conv = conv.update_votes(votes_different)
+        smoother = conv.group_k_smoother
+
+        if smoother['last_k'] != first_k:
+            # If best_k changed, counter should have reset to 1
+            assert smoother['last_k_count'] == 1, \
+                f"Counter should reset to 1 on k change, got {smoother['last_k_count']}"
+        else:
+            # If best_k happened to be the same, counter should have incremented
+            assert smoother['last_k_count'] == 3
+
+    def test_smoother_preserves_state_across_updates(self):
+        """
+        The smoother state from one update should be carried forward
+        to the next via deepcopy in update_votes.
+        """
+        conv = Conversation(conversation_id="test_d3_persist")
+        votes = self._make_votes(n_participants=30, n_comments=10, seed=42)
+
+        conv = conv.update_votes(votes)
+        s1 = conv.group_k_smoother.copy()
+
+        conv = conv.update_votes(votes)
+        s2 = conv.group_k_smoother.copy()
+
+        # State should have advanced (count incremented or reset)
+        assert s2['last_k_count'] != 0, "Count should not be 0 after second update"
+        if s1['last_k'] == s2['last_k']:
+            assert s2['last_k_count'] == s1['last_k_count'] + 1, \
+                f"Count should increment when k is same: {s1['last_k_count']} -> {s2['last_k_count']}"
+
+    def test_cold_start_same_results_as_without_smoother(self):
+        """
+        A single cold-start computation (one update_votes call) should
+        produce the same group_clusters as it would without the smoother,
+        because the first k is always accepted immediately.
+        """
+        conv = Conversation(conversation_id="test_d3_cold_equiv")
+        votes = self._make_votes(n_participants=30, n_comments=10, seed=42)
+        conv = conv.update_votes(votes)
+
+        # The smoothed_k should match what silhouette selection would give
+        smoother = conv.group_k_smoother
+        assert smoother['smoothed_k'] == smoother['last_k'], \
+            "Cold start: smoothed_k should match silhouette-best k"
+        # And group_clusters count should match
+        assert len(conv.group_clusters) == smoother['smoothed_k'], \
+            f"group_clusters count ({len(conv.group_clusters)}) should match smoothed_k ({smoother['smoothed_k']})"
+
+    @staticmethod
+    def _make_votes(n_participants=30, n_comments=10, seed=42):
+        """Create synthetic vote data for testing."""
+        rng = np.random.RandomState(seed)
+        vote_list = []
+        for pid in range(n_participants):
+            for tid in range(n_comments):
+                # Each participant votes on ~70% of comments
+                if rng.random() < 0.7:
+                    vote_list.append({
+                        'pid': pid,
+                        'tid': tid,
+                        'vote': int(rng.choice([-1, 1])),
+                    })
+        return {'votes': vote_list, 'lastVoteTimestamp': 1000}
 
 
 # ============================================================================

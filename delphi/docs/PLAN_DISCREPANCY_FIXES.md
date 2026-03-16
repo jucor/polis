@@ -460,7 +460,7 @@ See `delphi/docs/HANDOFF_K_DIVERGENCE_INVESTIGATION.md` for detailed context.
 | D2b | Base-cluster sort order | **PR 1** | **#2421** | **DONE** ✓ |
 | D2c | Vote count source (raw vs filtered matrix) | **PR 1** | **#2421** | **DONE** ✓ |
 | D2d | In-conv monotonicity (once in, always in) | **PR 1** | **#2421** | **DONE** ✓ (5 guard tests, T1-T5) |
-| D3 | K-smoother buffer | PR 10 | — | Fix |
+| D3 | K-smoother buffer | PR 10 | — | **DONE** ✓ |
 | D4 | Pseudocount formula | **PR 2** | **#2435** | **DONE** ✓ |
 | D5 | Proportion test | **PR 4** | — | **DONE** ✓ |
 | D6 | Two-proportion test | **PR 5** | — | **DONE** ✓ |

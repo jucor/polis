@@ -83,7 +83,18 @@ class Conversation:
         self.participant_info = {}
         self.vote_stats = {}
         self.group_votes = {}  # Initialize group_votes to avoid attribute errors
-        
+
+        # K-smoother state: prevents group count from flickering between updates.
+        # Clojure requires k to be the best (highest silhouette) for
+        # GROUP_K_BUFFER consecutive updates before switching smoothed_k.
+        # On cold start (no history), the first best-k is accepted immediately.
+        # See conversation.clj:449-468 (group-k-smoother).
+        self.group_k_smoother = {
+            'last_k': None,
+            'last_k_count': 0,
+            'smoothed_k': None,
+        }
+
         # Initialize with votes if provided
         if votes:
             self.update_votes(votes)
@@ -572,6 +583,7 @@ class Conversation:
         MAX_K = 5
         BASE_ITERS = 100
         GROUP_ITERS = 100
+        GROUP_K_BUFFER = 4  # conversation.clj:151 — consecutive updates before k switches
 
         # Check if we have projections
         if not self.proj:
@@ -676,10 +688,33 @@ class Conversation:
                 best_score = score
                 best_k = k
 
-        logger.info(f"Selected k={best_k} with silhouette={best_score:.4f}")
+        logger.info(f"Silhouette-best k={best_k} (score={best_score:.4f})")
 
-        # Use the best clustering
-        group_labels, group_centers, group_member_lists, _ = group_clusterings[best_k]
+        # K-smoother: require best_k to be stable for GROUP_K_BUFFER consecutive
+        # updates before switching smoothed_k.  Matches Clojure conversation.clj:449-468.
+        prev = self.group_k_smoother
+        this_k = best_k
+        last_k = prev['last_k']
+        same = (last_k is not None) and (this_k == last_k)
+        this_k_count = (prev['last_k_count'] + 1) if same else 1
+        if this_k_count >= GROUP_K_BUFFER:
+            smoothed_k = this_k
+        else:
+            # Keep previous smoothed_k, or accept this_k on cold start
+            smoothed_k = prev['smoothed_k'] if prev['smoothed_k'] is not None else this_k
+
+        self.group_k_smoother = {
+            'last_k': this_k,
+            'last_k_count': this_k_count,
+            'smoothed_k': smoothed_k,
+        }
+        logger.info(
+            f"K-smoother: this_k={this_k}, count={this_k_count}/{GROUP_K_BUFFER}, "
+            f"smoothed_k={smoothed_k}"
+        )
+
+        # Use the smoothed clustering
+        group_labels, group_centers, group_member_lists, _ = group_clusterings[smoothed_k]
 
         # Convert to dictionary format with base cluster IDs as members
         group_clusters = []
