@@ -650,3 +650,13 @@ to create a new worktree. If yes, provide a prompt they can use to start that se
 - `strict=False` on xfail means xpass (unexpected pass) is reported but not a failure. Used when some datasets pass by coincidence.
 - After rebase, D9 `test_repness_not_empty` started xpassing — the `comment_repness` list is populated (all pairs), but `group_repness` (selected reps) may still be affected by wrong thresholds. Consider tightening this test when fixing D9.
 - To rebase when base is updated: `git fetch origin kmeans_analysis_docs && git rebase --onto origin/kmeans_analysis_docs series-of-fixes-base series-of-fixes && git tag -f series-of-fixes-base origin/kmeans_analysis_docs`
+- **PR 14 readability goal**: Wherever PR 14 removes an unvectorized (scalar) code path in
+  favor of its vectorized replacement, the vectorized version must be made **at least as
+  readable** as the scalar one it replaces. Example: the scalar functions (`comment_stats`,
+  `add_comparative_stats`, `repness_metric`, `finalize_cmt_stats`) read like a step-by-step
+  recipe, while their vectorized replacement (`compute_group_comment_stats_df`) buries the
+  same logic in 150 lines of DataFrame plumbing. Fix: extract the statistics computation
+  (probabilities → tests → ratios → metrics → classify) into its own function, then delete
+  the scalar functions, then update tests. Apply this principle to every scalar/vectorized
+  pair removed in PR 14.
+  Found during D5 review (2026-03-16).
