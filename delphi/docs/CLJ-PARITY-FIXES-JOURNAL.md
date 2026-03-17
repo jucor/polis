@@ -1042,6 +1042,39 @@ conditional).
 
 ---
 
+## Session: PR 15 — Fix `load_votes()` Timestamp Ordering (2026-03-17)
+
+### Branch: `jc/clj-parity-d1-pca-sign-flip-prevention`
+
+### Discovery
+
+While reviewing the plan for the parity gate (PR 16), we investigated whether vote revision ordering could cause test mismatches. Found a real bug:
+
+- **`load_votes()`** reads CSV rows in arbitrary file order and discards timestamps. `Conversation.update_votes()` then calls `drop_duplicates(keep='last')`, keeping the last row in CSV order — not necessarily the latest revision.
+- **`create_test_conversation()`** has the same issue: iterates CSV rows without sorting, last write wins in the matrix.
+- **Production is safe**: `run_math_pipeline.py:fetch_votes()` queries Postgres with `ORDER BY v.created`.
+- **Clojure is safe**: poller also processes votes in `ORDER BY created` order.
+
+### TDD Cycle
+
+1. **RED**: Wrote 4 tests in `tests/test_common_utils.py`:
+   - `test_revision_keeps_latest_vote` — verifies `load_votes()` output order
+   - `test_revision_through_conversation_update` — end-to-end through `update_votes()`
+   - `test_revision_in_matrix_keeps_latest` — tests `create_test_conversation()` path
+   - `test_no_timestamp_column_still_works` — graceful fallback
+
+   All 3 revision tests failed as expected (wrong vote value). The no-timestamp test passed.
+
+2. **GREEN**: Added `df.sort_values('timestamp', kind='stable')` to both `load_votes()` and `create_test_conversation()` in `common_utils.py`. All 4 tests pass.
+
+3. **FULL SUITE**: 352 passed, 10 skipped, 53 xfailed, 1 xpassed — no regressions.
+
+### What's Next
+
+- PR 16: Remove xfail markers from legacy regression tests and verify cold-start blob parity.
+
+---
+
 ## Notes for Future Sessions
 
 - Private datasets are in `delphi/real_data/.local/` (separate git repo, linked via `link-to-polis-worktree.sh`)

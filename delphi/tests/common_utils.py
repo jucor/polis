@@ -34,8 +34,11 @@ def create_test_conversation(dataset_name: str) -> Conversation:
     dataset_files = get_dataset_files(dataset_name)
     votes_path = dataset_files['votes']
 
-    # Read votes from CSV
+    # Read votes from CSV, sorted by timestamp so vote revisions resolve correctly
+    # (last write wins — must be the chronologically latest vote)
     df = pd.read_csv(votes_path)
+    if 'timestamp' in df.columns:
+        df = df.sort_values('timestamp', kind='stable')
 
     # Get unique participant and comment IDs
     ptpt_ids = sorted(df['voter-id'].unique())
@@ -110,11 +113,15 @@ def load_votes(votes_path: str, limit: Optional[int] = None) -> Dict[str, List[D
         Dictionary with 'votes' key containing list of vote dictionaries
         Each vote has keys: 'pid' (participant ID), 'tid' (comment ID), 'vote' (value)
     """
-    # Read CSV
+    # Read CSV, sorted by timestamp so vote revisions resolve correctly
+    # (Conversation.update_votes uses drop_duplicates(keep='last') — last row wins,
+    # so rows must be in chronological order for the latest revision to prevail)
     if limit:
         df = pd.read_csv(votes_path, nrows=limit)
     else:
         df = pd.read_csv(votes_path)
+    if 'timestamp' in df.columns:
+        df = df.sort_values('timestamp', kind='stable')
 
     # Convert to the format expected by the Conversation class
     votes_list = []

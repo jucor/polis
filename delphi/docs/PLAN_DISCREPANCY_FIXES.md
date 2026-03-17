@@ -404,29 +404,47 @@ By this point, we should have good test coverage from all the per-discrepancy te
 
 ---
 
-### Investigation: Cold-Start K Divergence (after D15, before D12)
+### Investigation: Cold-Start K Divergence (branch off `jc/clj-parity-d15-...`)
 
-**Prerequisite**: All cold-start-relevant upstream fixes complete: D2/D2c/D2b (in-conv,
-vote counts, sort order), D15 (moderation handling). Note: D1 (PCA sign flips) only
-affects incremental updates — on cold start there are no previous components to align to.
+**Key insight**: The clustering pipeline (PCA → base clusters → group k-means →
+silhouette → k) does NOT depend on any repness fixes (D4, D5, D6, D7, D8, D9, D10,
+D11). Those all happen *after* clustering — they consume cluster memberships, they
+don't feed into them. The only fixes that affect clustering inputs are:
 
-After D15, the rating matrix construction, in-conv filtering, and PCA inputs should all
-match Clojure. Both implementations use silhouette for k-selection. Yet on vw, Python
-selects k=4 while Clojure selects k=2.
+- D2/D2b/D2c (in-conv, sort order, vote counts) — **already DONE** (in stack since PR 1)
+- D15 (moderation handling) — changes how moderated-out columns are handled in the
+  rating matrix (zero out vs remove). Most conversations have moderation, so D15
+  is needed before investigating.
+
+**Stack reordering**: D15 has been moved right after D8 (before D10, D11, D3) because
+it only touches `conversation.py` (not `repness.py`) and is a prerequisite for the
+k-divergence investigation. The new stack order is:
+
+```
+D8 → D15 → [K-investigation] → D10 → D11 → D3 → D12 → D1 → PR15
+```
+
+Start the investigation from branch **`jc/clj-parity-d15-moderation-handling-zeros-vs-removes`**.
+At that point, all cold-start-relevant fixes are in place (D2/D2b/D2c + D15).
+
+D1 (PCA sign flips) is NOT relevant for cold start — on first run, `prev_comps` is
+None, so sign alignment is a no-op. D1 only matters for incremental updates.
 
 **Investigation steps**:
 
-1. **PCA component comparison**: Feed the same rating matrix to both sklearn TruncatedSVD
+1. **Check moderation**: Which datasets have moderated-out comments? For those that
+   don't, D15 is irrelevant and results should be the same as pre-D15.
+2. **PCA component comparison**: Feed the same rating matrix to both sklearn TruncatedSVD
    and a Python reimplementation of Clojure's power iteration. Quantify divergence
    (cosine similarity per component, Frobenius norm).
-2. **Projection comparison**: Inject Clojure blob's PCA components into Python's
-   clustering path. Does k now match?
-3. **Base-cluster comparison**: Given the same projections, compare k-means centroids
+3. **Projection injection**: Inject Clojure blob's PCA components into Python's
+   clustering path. Does k now match? This isolates PCA vs clustering.
+4. **Base-cluster comparison**: Given the same projections, compare k-means centroids
    and member assignments. Check initialization (Clojure uses first-k-distinct centers
    from base clusters — does Python match?).
-4. **Silhouette score comparison**: Given the same base clusters, compare per-k
+5. **Silhouette score comparison**: Given the same base clusters, compare per-k
    silhouette scores. Are the scores close but the winner differs?
-5. **All datasets**: Run on all datasets with cold-start blobs, not just vw.
+6. **All datasets**: Run on all datasets with cold-start blobs.
 
 **Outcome**: Either (a) identify a fixable discrepancy that makes k match, or
 (b) document the inherent numerical divergence between sklearn SVD and Clojure
@@ -436,6 +454,67 @@ See `delphi/docs/HANDOFF_K_DIVERGENCE_INVESTIGATION.md` for detailed context.
 
 ---
 
+### PR 15: Fix `load_votes()` Timestamp Ordering
+
+**Why before PR 16**: The parity gate compares Python output against Clojure blobs. If `load_votes()` feeds votes in wrong order, vote revisions (participant changes agree → disagree) may resolve to the wrong value, producing a wrong rating matrix — and wrong test results.
+
+**The bug**: `load_votes()` in `tests/common_utils.py` reads CSV rows in arbitrary file order and **discards timestamps**. `Conversation.update_votes()` then calls `drop_duplicates(keep='last')`, which keeps the last row in *CSV order* — not necessarily the latest revision.
+
+**Production is safe**: `run_math_pipeline.py:fetch_votes()` queries Postgres with `ORDER BY v.created`, so votes arrive chronologically and `keep='last'` correctly picks the latest revision. The Clojure poller also processes votes in `ORDER BY created` order.
+
+**Fix**:
+- `load_votes()`: preserve the `timestamp` column from the CSV, sort by it before returning
+- Unit test: pass votes with a known revision (pid=0, tid=0: first agree at t=1, then disagree at t=2) in **reverse** CSV order (disagree row first, agree row second). Assert that after `Conversation.update_votes()`, the rating matrix contains the disagree vote (the later one), not the agree vote. This catches the "last in CSV order wins" bug.
+
+**Files**:
+- `tests/common_utils.py` — sort by timestamp
+- `tests/test_common_utils.py` (or similar) — unit test for revision ordering
+
+---
+
+### PR 16: Parity Gate — Remove Xfails and Verify Full Clojure Match
+
+**Why now**: All 13 discrepancy fixes (D1–D12, D15) are done. The regression tests in `test_legacy_clojure_regression.py` were written with `xfail` markers *because* the fixes hadn't landed yet. Now that they have, the xfails must be removed so CI actually enforces parity. If any test still fails after removing the xfail, that's either a real bug or a tolerance issue — not a sequencing problem (see analysis below).
+
+**Files**:
+- `tests/test_legacy_clojure_regression.py` — remove xfail markers, adjust tolerances if needed
+- `tests/test_discrepancy_fixes.py` — remove xfail markers on tests whose fixes have landed
+- `tests/test_legacy_repness_comparison.py` — remove xfails, upgrade from structural-only to value assertions
+
+**Steps**:
+1. Remove all `@pytest.mark.xfail` markers from the three test files
+2. Run the full suite on vw + biodiversity: `uv run pytest tests/test_legacy_clojure_regression.py tests/test_discrepancy_fixes.py tests/test_legacy_repness_comparison.py -v`
+3. For each failure: triage into one of three buckets (see below)
+4. Fix real issues; adjust tolerances only when mathematically justified (document why)
+5. Run with `--include-local` for full dataset coverage
+6. Ensure CI enforces parity going forward — no xfails left as a crutch
+
+**Failure triage buckets**:
+
+1. **Real bug** — the fix is incomplete or has an error. Fix it in this PR or a follow-up.
+2. **Tolerance issue** — the math is correct but numerical precision differs (e.g. different SVD implementations). Adjust tolerance with a comment explaining why.
+3. **Sequencing mismatch** — the Clojure blob reflects a processing order that Python's single-shot `recompute()` cannot reproduce.
+
+**Why bucket 3 should be rare (cold-start blobs)**:
+
+Investigation of `generate_cold_start_clojure.py` and the Clojure poller (`math/src/polismath/poller.clj`) shows that cold-start blobs are generated by inserting all votes with fresh sequential timestamps, which the poller picks up in a single polling cycle → single `conv-update` call → **no temporal state accumulation** (no k-smoother history, no progressive in-conv). The vote order within the batch doesn't affect the rating matrix (it's a `(pid, tid) → vote` mapping). This is functionally identical to Python's single-shot `recompute()`.
+
+Therefore, **cold-start blob comparisons should not have sequencing issues**. Failures against cold-start blobs are real bugs (bucket 1) or tolerance issues (bucket 2).
+
+**Incremental/original blobs — where sequencing matters**:
+
+The original (non-cold-start) math blobs were generated during the actual conversation lifetime, with Clojure processing votes across many polling iterations, accumulating stateful effects:
+- k-smoother history (k stabilized over multiple updates)
+- In-conv monotonicity (participants admitted early when `n_cmts < 7`)
+- PCA sign-flip prevention (consistency with previous iteration's components)
+
+Matching these requires reconstructing the Clojure polling timeline. The data for this exists — votes CSV has per-vote Unix timestamps, comments CSV has creation times and moderation status — so we could sort votes by timestamp, split into polling-interval batches, and replay through Python's `Conversation.update()` sequentially. This is the Replay Infrastructure (Replay PR A/B).
+
+**Strategy**: PR 15 focuses on **cold-start blob parity** (hard gate, no xfails). Incremental blob tests that fail due to sequencing get `@pytest.mark.skip(reason="requires replay infrastructure — see Replay PR B")` with a clear note about what temporal data would be needed to reconstruct the sequence.
+
+**Exit criteria**: After this PR, CI enforces cold-start parity. The only remaining skips are incremental-blob tests explicitly tied to the replay infrastructure.
+
+---
 ### Explicitly Deferred
 
 - **D13 — Subgroup Clustering**: Not implemented in Python, never used by TypeScript consumers. No fix needed.
