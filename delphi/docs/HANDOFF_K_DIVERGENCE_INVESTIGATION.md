@@ -1,122 +1,118 @@
-# Handoff: Cold-Start K Divergence Investigation
+# K-Divergence Investigation — RESOLVED
 
-## Problem
+## Problem (was)
 
-After all cold-start-relevant formula fixes (D2-D15), Python and Clojure still
-select different k values on cold-start blobs. On vw: Python=4, Clojure=2.
+After all cold-start-relevant formula fixes (D2-D15), Python and Clojure
+selected different k values on cold-start blobs. On vw: Python=4, Clojure=2.
 
-Both implementations use silhouette-based k-selection (`max-key silhouette` in
-Clojure conversation.clj:458, `argmax silhouette` in Python). The divergence
-must come from upstream numerical differences feeding into the silhouette scores.
+## Root Cause: Participant Row Ordering
 
-## What we know
+The k divergence was caused by **different participant ordering in the rating
+matrix**, which cascades through base-cluster IDs into group-level k-means
+initialization via first-k-distinct.
 
-### Pipeline chain to k-selection
+### The chain
 
 ```
-Votes → in-conv filtering [D2] → moderation [D15] → rating_mat
-  → PCA [sklearn SVD vs Clojure power iteration] → projections
-    → base clusters [k-means, D2b sort order] → group k-means → silhouette → k
+rating_mat row order
+  → PCA projection order
+    → base-cluster ID assignment (map-indexed on input rows)
+      → group-level k-means first-k-distinct init (first k base-cluster centers)
+        → different local optima → different silhouette scores → different k
 ```
 
-### Fixes already applied (cold-start relevant)
+### Clojure ordering
 
-| Fix | What it does | Status |
-|-----|-------------|--------|
-| D2 | In-conv threshold: `min(7, n_cmts)` | DONE |
-| D2b | Base-cluster sort by k-means ID | DONE |
-| D2c | Vote counts from `raw_rating_mat` | DONE |
-| D15 | Zero out moderated columns (not remove) | In stack |
+Clojure's NamedMatrix preserves **insertion order** (backed by
+`java.util.Vector`). When `rowname-subset` filters to `in-conv` participants,
+`filter-by-index` (utils.clj:128-133) preserves the **original matrix row
+order** (iterates source, checks membership in filter set). So the base-cluster
+ordering is the vote-encounter order of participants in the rating matrix.
 
-### D1 is NOT relevant for cold start
+### Python ordering (before fix)
 
-D1 (PCA sign flip prevention) aligns new components to previous components.
-On cold start, `prev_comps` is None → alignment is a no-op. D1 only matters
-for incremental updates.
+Python used `natsorted()` (conversation.py:232) to sort rating matrix rows
+by PID. This gave ascending PID order `[1, 2, 3, 4, 5, ...]` instead of
+the vote-encounter order `[2, 3, 4, 6, 8, ...]` that Clojure produces.
 
-### Observed divergence (vw dataset)
+### Impact
 
-Python silhouette scores:
-- k=2: 0.4567
-- k=3: 0.4810
-- k=4: 0.5083 ← winner
-- k=5: 0.3892
+With first-k-distinct initialization, different ordering → different initial
+centers → different k-means local optima → different silhouette landscape:
 
-Clojure selected k=2. We don't have Clojure's per-k silhouette scores, but
-the blob tells us the result: 2 groups, 17+50 members.
+| k | Python (PID order) | Clojure (encounter order) |
+|---|-------------------|--------------------------|
+| 2 | sil=0.457         | **sil=0.487 (wins)**     |
+| 3 | sil=0.481         | sil=0.329                |
+| 4 | **sil=0.508 (wins)** | sil=0.362             |
 
-### Possible causes (ranked by likelihood)
+## Fix
 
-1. **PCA component differences**: sklearn `TruncatedSVD` uses randomized SVD
-   (Halko et al. 2011). Clojure uses power iteration warm-started from previous
-   components (pca.clj:86-105). On cold start, Clojure starts from a random
-   vector. Different algorithms → different components → different projections →
-   different silhouette landscape.
+Changed `update_votes()` and `_apply_moderation()` to preserve vote-encounter
+order for participant rows instead of natsort:
 
-2. **K-means initialization**: Clojure uses `first-k-distinct` initialization
-   from base-cluster centers. Python uses sklearn's `k-means++`. Different
-   starting centroids → different cluster assignments → different silhouette.
+1. `update_votes()`: track first-appearance order from `vote_updates`, append
+   new PIDs in encounter order (not `natsorted`)
+2. `_apply_moderation()`: filter `raw_rating_mat.index` preserving order
+   (list comprehension instead of `natsorted`)
 
-3. **Distance metric in silhouette**: Verify both use the same distance
-   (Euclidean on PCA-projected data). Check if Clojure computes silhouette on
-   base-cluster centroids vs individual participant projections.
+Column (comment ID) ordering remains `natsorted` — column permutation doesn't
+affect PCA eigenvalues/vectors, only reorders component loadings.
 
-4. **Silhouette implementation**: Clojure's `silhouette` (clusters.clj:339)
-   may compute things slightly differently from sklearn's `silhouette_score`.
+## Results after fix
 
-## Investigation plan
+| Dataset | CS blob | Clj k | Py k | Sizes match? |
+|---------|---------|-------|------|--------------|
+| vw | ✓ | 2 | **2** | [50,17] exact |
+| biodiversity | ✓ | 2 | **2** | [81,19] exact |
+| bg2018 | ✓ | 2 | **2** | close ([51,49] vs [52,48]) |
+| FLI | ✓ | 2 | 3 | **still diverges** |
+| engage | empty | — | — | — |
+| bg2050 | empty | — | — | — |
+| pakistan | empty | — | — | — |
 
-### Step 1: Compare PCA components directly
+### FLI: inherent PCA divergence (not fixable)
 
-```python
-# Load Clojure blob PCA
-clj_pca = blob['pca']  # Check structure: components, projections?
+FLI has 94.5% NaN sparsity. The PCA components are nearly but not exactly
+identical (|cos|≈0.9997 vs 1.000000 for vw). This produces a silhouette
+landscape where k=2 and k=3 differ by only 0.001. The tiny PCA difference
+tips the balance. Injection test confirms: with Clojure projections injected,
+Python picks k=2. This is inherent to the PCA algorithm difference (sklearn
+full SVD vs Clojure power iteration) and not fixable without replicating
+Clojure's PCA exactly.
 
-# Run Python PCA on same rating_mat
-# Compare components: cosine similarity per component
-```
+## Investigation Findings (for the record)
 
-### Step 2: Inject Clojure PCA into Python clustering
+### PCA is NOT the primary cause for most datasets
 
-Feed Clojure's PCA projections to Python's clustering code. If k now matches
-Clojure, the divergence is in PCA. If k still differs, it's in clustering
-or silhouette.
+- vw: PCA components have cosine similarity = 1.000000 (identical!)
+- Projections are exactly negated (sign flip, irrelevant for clustering)
+- Silhouette scores are identical for both projection sets
 
-### Step 3: Compare silhouette implementations
+### Silhouette implementation matches
 
-Run both Clojure and Python silhouette on the same cluster assignments.
-Clojure's implementation is at `clusters.clj:339-374`. Check:
-- Distance metric (Euclidean? On what data?)
-- Handling of single-member clusters
-- Averaging method
+- Both use (b-a)/max(a,b) formula, unweighted mean
+- Both compute on base-cluster centers (not raw participants)
+- Clojure's `weighted-mean` without weights = unweighted mean
 
-### Step 4: Compare k-means initialization
+### K-means initialization matches
 
-Check if Clojure's `first-k-distinct` from base clusters gives different
-initial centroids than Python's approach.
+- Both use first-k-distinct (Clojure: `init-clusters`, Python: `_get_first_k_distinct_centers`)
+- Both sort base clusters by ID
+- The only difference was the DATA ORDER feeding into first-k-distinct
 
-## Files to read
+## Files modified
 
-- `math/src/polismath/math/clusters.clj:339-374` — Clojure silhouette
-- `math/src/polismath/math/conversation.clj:440-460` — Clojure k-selection
-- `math/src/polismath/math/pca.clj:86-105` — Clojure power iteration PCA
-- `delphi/polismath/conversation/conversation.py` — Python clustering
-- `delphi/polismath/pca_kmeans_rep/pca.py` — Python PCA
+- `delphi/polismath/conversation/conversation.py` — `update_votes()` and `_apply_moderation()`
+- `delphi/tests/test_conversation.py` — updated ordering tests
+- `delphi/tests/test_legacy_clojure_regression.py` — removed xfail on `test_group_clustering`
 
-## Blob fields to use
+## Future investigation
 
-- `pca` — Clojure's PCA output (check what's in there)
-- `group-clusters` — Clojure's final group assignments
-- `base-clusters` — Clojure's base-cluster assignments
-- `votes-base` — may contain the projected base-cluster centers
-
-## Expected outcomes
-
-Either:
-- **(a) Fixable**: Identify a specific implementation difference (initialization,
-  distance metric, etc.) that, when fixed, makes k match on all datasets.
-- **(b) Inherent divergence**: sklearn SVD and Clojure power iteration produce
-  sufficiently different components that the silhouette landscape differs.
-  Document the expected k divergence per dataset and tolerate it in tests.
-  In this case, blob-injection tests (testing stages independently) become
-  even more critical, since end-to-end comparison is not feasible.
+- **FLI k divergence**: Could be resolved by implementing Clojure's power
+  iteration PCA. Low priority — the silhouette gap is 0.001.
+- **Column ordering**: Currently natsorted, Clojure uses insertion order.
+  Doesn't affect clustering but could affect other comparisons.
+- **Multiple k-means restarts**: Using k-means++ with n_init=10 finds the
+  global optimum (k=4 for vw) regardless of ordering. This would be more
+  robust than first-k-distinct but would NOT match Clojure.
