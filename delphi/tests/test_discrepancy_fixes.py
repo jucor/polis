@@ -1453,3 +1453,59 @@ class TestD4BlobInjection:
         assert not mismatches, (
             f"[{dataset_name}] {len(mismatches)}/{total} p-success mismatches:\n"
             + "\n".join(mismatches[:10]))
+
+
+@pytest.mark.clojure_comparison
+class TestD8BlobInjection:
+    """D8: Verify repful-for classification against blob.
+
+    Reconstructs BOTH rat and rdt from group-votes, verifies that
+    rat > rdt matches blob's repful-for.
+    """
+
+    def test_repful_matches_blob(self, clojure_blob, dataset_name):
+        """rat > rdt classification should match blob's repful-for."""
+        repness = clojure_blob.get('repness', {})
+        group_votes = clojure_blob.get('group-votes', {})
+        if not repness or not group_votes:
+            pytest.skip(f"No repness or group-votes in blob for {dataset_name}")
+
+        # Precompute totals across all groups
+        all_group_votes = {}
+        for _gid, gv_data in group_votes.items():
+            for tid_str, counts in gv_data.get('votes', {}).items():
+                if tid_str not in all_group_votes:
+                    all_group_votes[tid_str] = {'A': 0, 'D': 0, 'S': 0}
+                all_group_votes[tid_str]['A'] += counts['A']
+                all_group_votes[tid_str]['D'] += counts['D']
+                all_group_votes[tid_str]['S'] += counts['S']
+
+        mismatches = []
+        total = 0
+        for gid, entries in repness.items():
+            gv = group_votes.get(gid, {}).get('votes', {})
+            for entry in entries:
+                tid_str = str(entry['tid'])
+                expected_repful = entry['repful-for']
+
+                group_cv = gv.get(tid_str, {'A': 0, 'D': 0, 'S': 0})
+                total_cv = all_group_votes.get(tid_str, {'A': 0, 'D': 0, 'S': 0})
+
+                rat = two_prop_test(
+                    group_cv['A'], total_cv['A'] - group_cv['A'],
+                    group_cv['S'], total_cv['S'] - group_cv['S'])
+                rdt = two_prop_test(
+                    group_cv['D'], total_cv['D'] - group_cv['D'],
+                    group_cv['S'], total_cv['S'] - group_cv['S'])
+
+                actual_repful = 'agree' if rat > rdt else 'disagree'
+                total += 1
+                if actual_repful != expected_repful:
+                    mismatches.append(
+                        f"group={gid} tid={entry['tid']}: "
+                        f"rat={rat:.4f}, rdt={rdt:.4f} -> '{actual_repful}', "
+                        f"blob repful-for='{expected_repful}'")
+
+        assert not mismatches, (
+            f"[{dataset_name}] {len(mismatches)}/{total} repful mismatches:\n"
+            + "\n".join(mismatches[:10]))
